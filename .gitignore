@@ -1,0 +1,16 @@
+# Recorded sensor data — keep raw CSVs out of git unless you deliberately commit one
+data/
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
