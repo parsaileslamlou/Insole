@@ -10,7 +10,13 @@ def file_lines(path):
 def serial_lines(PORT, BAUD):
     import serial
     with serial.Serial(PORT, BAUD, timeout=1) as ser:
-        pass   
+        ser.reset_input_buffer()
+        for _ in range(10): # RETUNE
+            ser.readline()
+        while True:
+            raw = ser.readline()
+            line = raw.decode("utf-8", errors="ignore")
+            yield line
         
 malformed = empty = valid = 0
 source = file_lines("capture.txt")
@@ -18,10 +24,10 @@ with open("readings.csv", "w") as f:
     f.write("s0,s1,s2,s3,s4,s5\n")
     for line in source:
         line = line.strip()
-        parts = line.split(',')
         if not line: 
             empty += 1
             continue
+        parts = line.split(',')
         if len(parts) != 6:
             malformed += 1
             continue
@@ -30,8 +36,7 @@ with open("readings.csv", "w") as f:
         except ValueError:
             malformed += 1
             continue
-        strValues = [str(v) for v in values]
-        row = ",".join(strValues)
+        row = ",".join(parts)
         valid += 1
         f.write(row + "\n")
 
