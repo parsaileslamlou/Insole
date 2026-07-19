@@ -15,6 +15,7 @@
 
 #include <Arduino.h>
 #include <esp_timer.h>
+#include "sample.h"
 
 // ---------------------------------------------------------------- config
 
@@ -50,14 +51,6 @@ uint16_t readChannelStub(uint8_t i) {
 uint16_t readChannel(uint8_t i) {
     return USE_STUB ? readChannelStub(i) : readChannelReal(i);
 }
-
-// ---------------------------------------------------------------- state
-
-struct Sample {
-    uint16_t seq;
-    int64_t  t_us;
-    uint16_t v[6];
-};
 
 Sample   ring[BUF_N];
 int      head = 0;
