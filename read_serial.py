@@ -1,21 +1,23 @@
 import sys
 from gait_gen import parse_frame     
 
-PORT = "COM3"      # replace with your real port from list_ports
+PORT = "COM12"     # CH343 USB-UART bridge (from list_ports)
 BAUD = 115200      # must match firmware Serial.begin()
+DURATION_S = 60    # capture window before clean stop (None = run forever)
 
 def file_lines(path):
     with open(path, "r") as f:
         for line in f:
             yield line
 
-def serial_lines(PORT, BAUD):
-    import serial
+def serial_lines(PORT, BAUD, duration_s=None):
+    import serial, time
+    deadline = None if duration_s is None else time.monotonic() + duration_s
     with serial.Serial(PORT, BAUD, timeout=1) as ser:
         ser.reset_input_buffer()
         for _ in range(10):  # RETUNE
             ser.readline()
-        while True:
+        while deadline is None or time.monotonic() < deadline:
             raw = ser.readline()
             if not raw:
                 continue
@@ -24,7 +26,7 @@ def serial_lines(PORT, BAUD):
 malformed = empty = valid = bad_checksum = seq_breaks = timing_breaks = 0
 prev_seq = prev_ts = None
 
-source = serial_lines(PORT, BAUD)
+source = serial_lines(PORT, BAUD, DURATION_S)
 with open("readings.csv", "w") as f:
     f.write("seq,ts_us,s0,s1,s2,s3,s4,s5\n")
     for line in source:

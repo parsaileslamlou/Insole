@@ -21,7 +21,7 @@
 
 // ADC1 pins, one per channel, in the order given by framespec.md section 3.
 // TODO: confirm against the assembled hardware.
-const uint8_t PINS[6]    = {1, 2, 4, 5, 6, 7};
+const uint8_t PINS[6]    = {4, 5, 6, 7, 8, 3};
 
 const int     OVERSAMPLE = 8;      // ADC reads averaged per sample
 const int64_t PERIOD_US  = 10000;  // 100 Hz
