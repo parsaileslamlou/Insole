@@ -29,7 +29,7 @@ const int     BUF_N      = 32;     // ring buffer slots
 
 // Set to false once sensors are attached. The stub lets the full pipeline
 // (framing, serial, host logger) be exercised with no hardware present.
-const bool    USE_STUB   = true;
+const bool    USE_STUB   = false;
 
 // ---------------------------------------------------------------- sampling
 
