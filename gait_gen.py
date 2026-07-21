@@ -66,7 +66,7 @@ def gait_lines(duration_s, mode="walk"):
         t = k / SAMPLE_HZ                                        
         readings = [sensor_value(t, i, mode) for i in range(6)]   
         yield make_frame(k % 65536 , k * PERIOD_US, readings)           
-                
+
 STANCE_START = min(w[0] for w in SENSOR_WINDOWS)
 STANCE_END   = max(w[1] for w in SENSOR_WINDOWS)
 
