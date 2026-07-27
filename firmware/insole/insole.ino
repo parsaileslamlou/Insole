@@ -15,12 +15,13 @@
 
 #include <Arduino.h>
 #include <esp_timer.h>
+#include "sample.h"
 
 // ---------------------------------------------------------------- config
 
 // ADC1 pins, one per channel, in the order given by framespec.md section 3.
 // TODO: confirm against the assembled hardware.
-const uint8_t PINS[6]    = {1, 2, 4, 5, 6, 7};
+const uint8_t PINS[6]    = {4, 5, 6, 7, 8, 3};
 
 const int     OVERSAMPLE = 8;      // ADC reads averaged per sample
 const int64_t PERIOD_US  = 10000;  // 100 Hz
@@ -28,7 +29,7 @@ const int     BUF_N      = 32;     // ring buffer slots
 
 // Set to false once sensors are attached. The stub lets the full pipeline
 // (framing, serial, host logger) be exercised with no hardware present.
-const bool    USE_STUB   = true;
+const bool    USE_STUB   = false;
 
 // ---------------------------------------------------------------- sampling
 
@@ -50,14 +51,6 @@ uint16_t readChannelStub(uint8_t i) {
 uint16_t readChannel(uint8_t i) {
     return USE_STUB ? readChannelStub(i) : readChannelReal(i);
 }
-
-// ---------------------------------------------------------------- state
-
-struct Sample {
-    uint16_t seq;
-    int64_t  t_us;
-    uint16_t v[6];
-};
 
 Sample   ring[BUF_N];
 int      head = 0;
