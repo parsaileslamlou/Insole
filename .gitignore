@@ -2,6 +2,11 @@
 data/
 *.csv
 
+# Jupyter
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+.virtual_documents/
+
 # Python
 __pycache__/
 *.py[cod]
