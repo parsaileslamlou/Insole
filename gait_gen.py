@@ -67,6 +67,22 @@ def gait_lines(duration_s, mode="walk"):
         readings = [sensor_value(t, i, mode) for i in range(6)]   
         yield make_frame(k % 65536 , k * PERIOD_US, readings)           
                 
-with open("sim_walk.txt", "w") as f:
-    for line in gait_lines(60):
-        f.write(line + "\n")
+STANCE_START = min(w[0] for w in SENSOR_WINDOWS)
+STANCE_END   = max(w[1] for w in SENSOR_WINDOWS)
+
+def true_stances(duration_s, mode="walk"):
+    """Ground-truth stance intervals as (start_frame, end_frame), inclusive."""
+    if mode == "standing":
+        return []
+    out = []
+    for k in range(int(duration_s / CYCLE_S)):
+        t0 = k * CYCLE_S
+        a = int(round((t0 + STANCE_START) * SAMPLE_HZ))
+        b = int(round((t0 + STANCE_END) * SAMPLE_HZ)) - 1
+        out.append((a, b))
+    return out
+
+if __name__ == "__main__":
+    with open("sim_walk.txt", "w") as f:
+        for line in gait_lines(60):
+            f.write(line + "\n")
