@@ -43,11 +43,11 @@ NOISE_STD = 25
 
 STANDING_LOADS = [1800, 900, 1200, 1300, 1000, 400]
 
-def sensor_value(t, i, mode="walk"):
+def sensor_value(t, i, mode="walk", cycle_s=CYCLE_S):
     if mode == "standing":
-        value = STANDING_LOADS[i]               
+        value = STANDING_LOADS[i]
     else:
-        phase = (t % CYCLE_S) / CYCLE_S
+        phase = (t % cycle_s) / cycle_s
         start, end = SENSOR_WINDOWS[i]
         if start <= phase < end:
             progress = (phase - start) / (end - start)
@@ -60,11 +60,11 @@ def sensor_value(t, i, mode="walk"):
 SAMPLE_HZ = 100
 PERIOD_US = 1_000_000 // SAMPLE_HZ
 
-def gait_lines(duration_s, mode="walk"):
+def gait_lines(duration_s, mode="walk", cycle_s=CYCLE_S):
     n = int(duration_s * SAMPLE_HZ)
     for k in range(n):
-        t = k / SAMPLE_HZ                                        
-        readings = [sensor_value(t, i, mode) for i in range(6)]   
+        t = k / SAMPLE_HZ
+        readings = [sensor_value(t, i, mode, cycle_s) for i in range(6)]
         yield make_frame(k % 65536 , k * PERIOD_US, readings)           
                 
 STANCE_START = min(w[0] for w in SENSOR_WINDOWS)
@@ -85,4 +85,8 @@ def true_stances(duration_s, mode="walk"):
 if __name__ == "__main__":
     with open("sim_walk.txt", "w") as f:
         for line in gait_lines(60):
+            f.write(line + "\n")
+
+    with open("sim_fast.txt", "w") as f:
+        for line in gait_lines(60, cycle_s=0.6):
             f.write(line + "\n")
