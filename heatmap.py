@@ -3,13 +3,9 @@ import matplotlib.pyplot as plt
 from matplotlib.path import Path
 from matplotlib.animation import FuncAnimation, PillowWriter
 
-SENSOR_COLS = ["s0", "s1", "s2", "s3", "s4", "s5"]
-
-SENSOR_COORDS = {
-    "s0": (0.35, 0.10), "s1": (0.65, 0.10),
-    "s2": (0.30, 0.55), "s3": (0.70, 0.55),
-    "s4": (0.35, 0.90), "s5": (0.70, 0.90),
-}
+# Single source of truth: these used to be repeated here, in the notebook and
+# in detector.py. Editing one copy and not the others silently moved the CoP.
+from detector import SENSOR_COLS, SENSOR_COORDS
 
 FOOT_OUTLINE = [
     (0.30, 0.02), (0.20, 0.08), (0.16, 0.20), (0.18, 0.34),
