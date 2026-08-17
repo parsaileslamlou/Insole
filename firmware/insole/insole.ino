@@ -19,8 +19,10 @@
 
 // ---------------------------------------------------------------- config
 
-// ADC1 pins, one per channel, in the order given by framespec.md section 3.
-// TODO: confirm against the assembled hardware.
+// ADC1 pins, one per channel, in the order given by framespec.md section 3
+// (heel, lateral midfoot, 1st/3rd/5th metatarsal heads, hallux). Confirmed
+// against the assembled board: this is the soldered mapping, not a guess.
+// All six are ADC1 (GPIO1-GPIO10), so they stay readable while WiFi is up.
 const uint8_t PINS[6]    = {4, 5, 6, 7, 8, 3};
 
 const int     OVERSAMPLE = 8;      // ADC reads averaged per sample

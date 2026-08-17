@@ -155,7 +155,7 @@ Counters reported at exit: valid, malformed, empty, bad checksum, dropped.
 
 ## 9. Open items
 
-- ADC1 pin → sensor mapping (six of GPIO1–GPIO10), pending hardware assembly.
+- ~~ADC1 pin → sensor mapping (six of GPIO1–GPIO10), pending hardware assembly.~~ Resolved: soldered as GPIO 4, 5, 6, 7, 8, 3 for channels s0–s5, in the §3 order. `PINS` in the sketch is the record of that mapping.
 - Physical FSR placement to be confirmed against the channel order in §3. Exact 2D coordinates are needed later for centre-of-pressure and heatmap work, and will live in a single shared coordinate table.
 
 ## Appendix: board selection
