@@ -50,8 +50,15 @@ SHUFFLE_AMP_SCALE = 0.45           # RETUNE: shuffling loads the foot more light
 DROPOUT_CH        = 0              # RETUNE: which channel dies (s0 = heel, worst case)
 DROPOUT_T         = (20.0, 40.0)   # RETUNE: seconds; dead window inside a 60 s capture
 
-def sensor_value(t, i, mode="walk", cycle_s=CYCLE_S,
+def resolve_cycle(mode, cycle_s=None):
+    if cycle_s is not None:
+        return cycle_s
+    return SHUFFLE_CYCLE_S if mode == "shuffle" else CYCLE_S
+
+def sensor_value(t, i, mode="walk", cycle_s=None,
                  dropout_ch=None, dropout_t=(None, None)):
+    cycle_s = resolve_cycle(mode, cycle_s)
+
     # A disconnected FSR with a pulldown reads flat zero, not noisy zero,
     # so this returns before noise is added.
     if dropout_ch is not None and i == dropout_ch:
@@ -66,7 +73,6 @@ def sensor_value(t, i, mode="walk", cycle_s=CYCLE_S,
         if mode == "shuffle":
             # A shuffle is a normal step done small and fast: same windows,
             # same sine shape, shorter cycle and lower load.
-            cycle_s = SHUFFLE_CYCLE_S
             amplitude *= SHUFFLE_AMP_SCALE
         phase = (t % cycle_s) / cycle_s
         start, end = SENSOR_WINDOWS[i]
@@ -81,7 +87,7 @@ def sensor_value(t, i, mode="walk", cycle_s=CYCLE_S,
 SAMPLE_HZ = 100
 PERIOD_US = 1_000_000 // SAMPLE_HZ
 
-def gait_lines(duration_s, mode="walk", cycle_s=CYCLE_S,
+def gait_lines(duration_s, mode="walk", cycle_s=None,
                dropout_ch=None, dropout_t=(None, None)):
     n = int(duration_s * SAMPLE_HZ)
     for k in range(n):
@@ -93,7 +99,7 @@ def gait_lines(duration_s, mode="walk", cycle_s=CYCLE_S,
 STANCE_START = min(w[0] for w in SENSOR_WINDOWS)
 STANCE_END   = max(w[1] for w in SENSOR_WINDOWS)
 
-def true_stances(duration_s, mode="walk", cycle_s=CYCLE_S):
+def true_stances(duration_s, mode="walk", cycle_s=None):
     """Ground-truth stance intervals as (start_frame, end_frame), inclusive.
 
     STANCE_START/STANCE_END are phase fractions, not seconds, so they scale
@@ -104,6 +110,7 @@ def true_stances(duration_s, mode="walk", cycle_s=CYCLE_S):
     delete a step, and truth must not be bent to match what the detector can
     see or the test becomes circular.
     """
+    cycle_s = resolve_cycle(mode, cycle_s)
     if mode == "standing":
         return []
     out = []
