@@ -35,19 +35,20 @@ def parse_frame(line):
 import math
 import random
 
-CYCLE_S = 1.0
+CYCLE_S = 1.0                      # RETUNE: nominal stride period, seconds
+# RETUNE: per-sensor load windows as fractions of the stride, heel-first.
 SENSOR_WINDOWS = [(0.00, 0.30), (0.15, 0.45), (0.30, 0.55),
                   (0.32, 0.57), (0.35, 0.58), (0.45, 0.62)]
-AMPLITUDES = [3200, 1400, 2600, 2800, 2200, 1800]
-NOISE_STD = 25
+AMPLITUDES = [3200, 1400, 2600, 2800, 2200, 1800]   # RETUNE: peak ADC counts per channel
+NOISE_STD = 25                     # RETUNE: measure against a real noise-floor capture
 
-STANDING_LOADS = [1800, 900, 1200, 1300, 1000, 400]
+STANDING_LOADS = [1800, 900, 1200, 1300, 1000, 400]  # RETUNE: static ADC counts per channel
 
 # --- nasty stream parameters -------------------------------------
 SHUFFLE_CYCLE_S   = 0.50           # RETUNE: short-stride shuffle stride period
 SHUFFLE_AMP_SCALE = 0.45           # RETUNE: shuffling loads the foot more lightly
 DROPOUT_CH        = 0              # RETUNE: which channel dies (s0 = heel, worst case)
-DROPOUT_T         = (20.0, 40.0)   # seconds; dead window inside a 60 s capture
+DROPOUT_T         = (20.0, 40.0)   # RETUNE: seconds; dead window inside a 60 s capture
 
 def sensor_value(t, i, mode="walk", cycle_s=CYCLE_S,
                  dropout_ch=None, dropout_t=(None, None)):
