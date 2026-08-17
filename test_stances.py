@@ -1,0 +1,136 @@
+"""Regression tests for stance detection. Run from the repo root:
+
+    python test_stances.py
+
+One case per simulated stream, each guarding a named failure bucket.
+Ground truth always comes from gait_gen.true_stances, never from the
+detector -- seeding a test from the detector's current output locks in
+today's bugs permanently.
+
+Counts catch fragmentation, annihilation and merging. Nothing catches a
+boundary error automatically, so stance_report is printed on every run to
+keep it at least visible.
+"""
+
+import os
+import subprocess
+import sys
+
+import pandas as pd
+
+import detector as D
+from gait_gen import SHUFFLE_CYCLE_S, true_stances
+
+REPO = os.path.dirname(os.path.abspath(__file__))
+
+# stream, gait_gen mode for truth, cycle_s for truth, the failure it guards
+CASES = [
+    ("sim_walk",    "walk",     1.0,             "baseline regression"),
+    ("sim_fast",    "walk",     0.6,             "a too-long GAP_MERGE eating alternate steps"),
+    ("sim_shuffle", "shuffle",  SHUFFLE_CYCLE_S, "a too-high MIN_DURATION annihilating short stances"),
+    ("sim_dropout", "walk",     1.0,             "a dead heel channel delaying or killing entry"),
+    ("sim_stand",   "standing", 1.0,             "missing MAX_DURATION, or MAX_DURATION fragmenting"),
+]
+
+
+def ensure_csv(stem):
+    """Sim CSVs are gitignored, so rebuild them from the committed .txt streams."""
+    csv_path = os.path.join(REPO, stem + ".csv")
+    txt_path = os.path.join(REPO, stem + ".txt")
+    if os.path.exists(csv_path):
+        return csv_path
+    if not os.path.exists(txt_path):
+        raise SystemExit(f"missing {txt_path} -- run: python gait_gen.py")
+    subprocess.run([sys.executable, os.path.join(REPO, "read_serial.py"),
+                    txt_path, csv_path], check=True, cwd=REPO)
+    return csv_path
+
+
+def total_force(csv_path):
+    df = pd.read_csv(csv_path)
+    return df[D.SENSOR_COLS].sum(axis=1).to_numpy()
+
+
+def check(name, condition, detail=""):
+    print(("PASS  " if condition else "FAIL  ") + name + (f"  {detail}" if detail else ""))
+    return bool(condition)
+
+
+def test_streams():
+    passed = failed = 0
+    for stem, mode, cycle_s, guards in CASES:
+        total = total_force(ensure_csv(stem))
+        truth = true_stances(60, mode=mode, cycle_s=cycle_s)
+        detected = D.merge_close(D.find_stances(total))
+        report = D.stance_report(detected, truth)
+
+        ok = check(f"{stem:12s} detected={len(detected):4d} truth={len(truth):4d}",
+                   len(detected) == len(truth), f"guards: {guards}")
+        passed, failed = (passed + ok, failed + (not ok))
+
+        # Reported, never asserted: counts are structurally blind to this.
+        if report["n_matched"]:
+            print(f"        boundary: start {report['mean_start_offset']:+.1f} fr, "
+                  f"end {report['mean_end_offset']:+.1f} fr, "
+                  f"duration {report['mean_duration_error']:+.1f} fr "
+                  f"({report['n_matched']} matched)")
+    return passed, failed
+
+
+def test_merge_close():
+    """merge_close as a unit, plus the fragmentation case it exists to fix."""
+    passed = failed = 0
+
+    for name, args, want in [
+        ("merge_close empty",        ([],), []),
+        ("merge_close no-op",        ([(0, 10), (40, 50)], 12), [(0, 10), (40, 50)]),
+        ("merge_close joins pair",   ([(0, 10), (15, 25)], 12), [(0, 25)]),
+        ("merge_close joins chain",  ([(0, 10), (15, 25), (30, 40)], 12), [(0, 40)]),
+        ("merge_close respects gap", ([(0, 10), (23, 33)], 12), [(0, 10), (23, 33)]),
+    ]:
+        got = D.merge_close(*args)
+        ok = check(name, got == want, f"got={got}")
+        passed, failed = (passed + ok, failed + (not ok))
+
+    # Raise T_OFF above the shuffle midstance trough (596) and drop MIN_DURATION
+    # so the fragments survive: the stream shatters and merge_close must put it
+    # back. This proves merge_close is load-bearing, not decoration.
+    total = total_force(ensure_csv("sim_shuffle"))
+    truth = true_stances(60, mode="shuffle", cycle_s=SHUFFLE_CYCLE_S)
+    raw = D.find_stances(total, D.T_ON, 750, 10, D.MAX_DURATION)
+    merged = D.merge_close(raw, D.GAP_MERGE)
+    ok = check("merge_close repairs fragmented shuffle",
+               len(raw) > len(truth) and len(merged) == len(truth),
+               f"raw={len(raw)} merged={len(merged)} truth={len(truth)}")
+    passed, failed = (passed + ok, failed + (not ok))
+
+    return passed, failed
+
+
+def test_true_stances():
+    """Guard the cadence bug: truth must scale with cycle_s, in count and width."""
+    passed = failed = 0
+    for name, kwargs, n, dur in [
+        ("true_stances walk",     {"cycle_s": 1.0},                          60, 62),
+        ("true_stances fast",     {"cycle_s": 0.6},                         100, 37),
+        ("true_stances shuffle",  {"mode": "shuffle", "cycle_s": 0.5},      120, 31),
+        ("true_stances standing", {"mode": "standing"},                       0, None),
+    ]:
+        got = true_stances(60, **kwargs)
+        ok = len(got) == n and (dur is None or all(b - a + 1 == dur for a, b in got))
+        ok = check(name, ok, f"n={len(got)} want={n}")
+        passed, failed = (passed + ok, failed + (not ok))
+    return passed, failed
+
+
+if __name__ == "__main__":
+    total_pass = total_fail = 0
+    for suite in (test_true_stances, test_merge_close, test_streams):
+        print(f"--- {suite.__name__} ---")
+        p, f = suite()
+        total_pass, total_fail = total_pass + p, total_fail + f
+        print()
+
+    print(f"{total_pass} passed, {total_fail} failed")
+    if total_fail:
+        sys.exit(1)
