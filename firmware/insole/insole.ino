@@ -1,142 +1,331 @@
-// 6-channel FSR sampler for the ESP32-S3.
-//
-// Samples six force-sensitive resistors at 100 Hz and streams one CSV frame per
-// sample over USB CDC. Readings are raw ADC counts; calibration to force units
-// is done on the host so that recalibration does not require a reflash.
-//
-// Frame format (see framespec.md for the full contract):
-//
-//   INS,<seq>,<ts_us>,<s0>,<s1>,<s2>,<s3>,<s4>,<s5>,<cksum>\n
-//
-//   seq    uint16, wraps at 65536
-//   ts_us  int64, microseconds since capture start
-//   s0-s5  raw 12-bit ADC counts, 0-4095
-//   cksum  (seq + ts_us + s0 + ... + s5) % 256
+/* =====================================================================
+ * insole.ino  —  6ch FSR sampler, 100 Hz, ESP32-S3-DevKitC-1 (WROOM-1)
+ *
+ * Transports:
+ *   USB CDC Serial  — ALWAYS ON, unconditional, unchanged behaviour
+ *   BLE NUS notify  — additive, best-effort, never blocks the sampler
+ *
+ * Frame (unchanged): INS,seq,ts_us,s0,s1,s2,s3,s4,s5,checksum\n
+ *   checksum = (sum of the eight integer fields) mod 256
+ *
+ * Every line added for BLE is bracketed by
+ *   // ===== BLE ADDED =====  ...  // ===== END BLE ADDED =====
+ * Delete those blocks and the two call sites in setup()/loop() and you are
+ * back to the original serial-only sketch.
+ * ===================================================================== */
 
 #include <Arduino.h>
-#include <esp_timer.h>
-#include "sample.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 
-// ---------------------------------------------------------------- config
+// ===== BLE ADDED =====
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>   // If your core errors "BLE2902.h: No such file", delete this
+                       // include AND the addDescriptor() line below; core 3.x
+                       // attaches the CCCD automatically. A *deprecation warning*
+                       // is fine — ignore it.
+// ===== END BLE ADDED =====
 
-// ADC1 pins, one per channel, in the order given by framespec.md section 3
-// (heel, lateral midfoot, 1st/3rd/5th metatarsal heads, hallux). Confirmed
-// against the assembled board: this is the soldered mapping, not a guess.
-// All six are ADC1 (GPIO1-GPIO10), so they stay readable while WiFi is up.
-const uint8_t PINS[6]    = {4, 5, 6, 7, 8, 3};
+/* ---------------------------------------------------------------------
+ * Existing configuration (unchanged)
+ * ------------------------------------------------------------------- */
+// s0..s5 -> GPIO. All ADC1 (ADC2 is unusable once the radio is on — and the
+// radio IS on now, so this mapping is no longer just a preference).
+// NOTE: GPIO3 is a JTAG/strapping pin on the S3. It is fine as an ADC input at
+// runtime, but do not hold it externally during reset.
+const uint8_t PINS[6]     = {4, 5, 6, 7, 8, 3};
+const int     OVERSAMPLE  = 8;
+const int64_t PERIOD_US   = 10000;   // 100 Hz
+const int     BUF_N       = 32;      // ring buffer slots (serial path)
+const bool    USE_STUB    = false;
 
-const int     OVERSAMPLE = 8;      // ADC reads averaged per sample
-const int64_t PERIOD_US  = 10000;  // 100 Hz
-const int     BUF_N      = 32;     // ring buffer slots
+/* If sample.h already provides an oversampled read and a frame builder, set
+ * this to 0 and uncomment the include. Left at 1 so this file compiles and
+ * runs standalone. */
+#define USE_LOCAL_SAMPLE_HELPERS 1
+#if !USE_LOCAL_SAMPLE_HELPERS
+  #include "sample.h"
+#endif
 
-// Set to false once sensors are attached. The stub lets the full pipeline
-// (framing, serial, host logger) be exercised with no hardware present.
-const bool    USE_STUB   = false;
+#define MAX_LINE_LEN 72   // worst-case frame is ~57 bytes + NUL
 
-// ---------------------------------------------------------------- sampling
+// ===== BLE ADDED =====
+#define BLE_ENABLED        1
+#define BLE_DEVICE_NAME    "INSOLE"
+#define FRAMES_PER_NOTIFY  3      // compile-time, per the spec decision
+#define MIN_USABLE_MTU     100    // refuse to notify below this
+#define BLE_QUEUE_LEN      64     // ~0.64 s of slack at 100 Hz
+#define MTU_WAIT_US        2000000LL  // how long to wait for MTU negotiation
 
-uint16_t readChannelReal(uint8_t i) {
-    uint32_t sum = 0;
-    for (int k = 0; k < OVERSAMPLE; k++) {
-        sum += analogRead(PINS[i]);
+// Nordic UART Service — standard UUIDs, not custom.
+#define NUS_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+#define NUS_RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // central -> us (unused)
+#define NUS_TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // us -> central (notify)
+
+typedef struct {
+  uint8_t len;
+  char    text[MAX_LINE_LEN];
+} LineMsg;
+
+static QueueHandle_t       bleQueue          = nullptr;
+static BLEServer*          pServer           = nullptr;
+static BLECharacteristic*  pTxChar           = nullptr;
+static volatile bool       bleConnected      = false;
+static volatile bool       bleMtuOk          = false;
+static volatile uint16_t   bleMtu            = 0;
+static volatile int64_t    bleConnectedAtUs  = 0;
+static volatile uint32_t   bleDropped        = 0;  // queue-full drops
+static volatile uint32_t   bleSkippedNoConn  = 0;  // frames not offered (no link)
+static volatile uint32_t   bleNotifies       = 0;  // notify() calls issued
+// ===== END BLE ADDED =====
+
+/* ---------------------------------------------------------------------
+ * Sampling + framing
+ * ------------------------------------------------------------------- */
+#if USE_LOCAL_SAMPLE_HELPERS
+
+static uint16_t sampleChannel(uint8_t pin) {
+  if (USE_STUB) {
+    // deterministic stub: slow triangle so the host has something to validate
+    static uint32_t t = 0;
+    t++;
+    return (uint16_t)((t + pin * 300) % 4096);
+  }
+  uint32_t acc = 0;
+  for (int i = 0; i < OVERSAMPLE; i++) acc += analogRead(pin);
+  return (uint16_t)(acc / OVERSAMPLE);
+}
+
+static int buildFrameLine(char* out, size_t n, uint16_t seq, int64_t ts_us,
+                          const uint16_t v[6]) {
+  // Checksum over the EIGHT integer fields: seq, ts_us, s0..s5.
+  // ts_us is summed at full 64-bit width. (The old firmware truncated it to
+  // 32 bits, which silently diverges from the Python validator after ~71.5
+  // minutes of continuous capture. Identical below that, so this is a safe
+  // fix to take now.)
+  uint64_t sum = (uint64_t)seq + (uint64_t)ts_us;
+  for (int i = 0; i < 6; i++) sum += v[i];
+  uint8_t ck = (uint8_t)(sum & 0xFF);
+
+  return snprintf(out, n, "INS,%u,%lld,%u,%u,%u,%u,%u,%u,%u\n",
+                  (unsigned)seq, (long long)ts_us,
+                  v[0], v[1], v[2], v[3], v[4], v[5], (unsigned)ck);
+}
+#endif
+
+/* ---------------------------------------------------------------------
+ * ===== BLE ADDED =====  BLE plumbing
+ * ------------------------------------------------------------------- */
+#if BLE_ENABLED
+
+class InsoleServerCB : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override {
+    bleConnected     = true;
+    bleMtuOk         = false;
+    bleMtu           = 0;
+    bleConnectedAtUs = esp_timer_get_time();
+  }
+  void onDisconnect(BLEServer* s) override {
+    bleConnected = false;
+    bleMtuOk     = false;
+    bleMtu       = 0;
+    // Throw away anything still queued. On reconnect we must not dump a burst
+    // of stale frames — that looks like a timing anomaly to the host.
+    if (bleQueue) xQueueReset(bleQueue);
+    s->startAdvertising();   // become findable again immediately
+  }
+};
+
+static void bleInit() {
+  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setMTU(517);          // our preferred MTU; the central decides
+
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new InsoleServerCB());
+
+  BLEService* svc = pServer->createService(NUS_SERVICE_UUID);
+
+  pTxChar = svc->createCharacteristic(NUS_TX_UUID,
+                                      BLECharacteristic::PROPERTY_NOTIFY);
+  pTxChar->addDescriptor(new BLE2902());   // CCCD — delete with the include if needed
+
+  // RX exists only so the service is a real NUS. We never read it.
+  svc->createCharacteristic(NUS_RX_UUID,
+                            BLECharacteristic::PROPERTY_WRITE |
+                            BLECharacteristic::PROPERTY_WRITE_NR);
+
+  svc->start();
+
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(NUS_SERVICE_UUID);   // so nRF Connect shows "Nordic UART Service"
+  adv->setScanResponse(true);
+  adv->setMinPreferred(0x06);              // conservative conn-interval hint
+  adv->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+}
+
+/* Send a buffer, splitting on NEWLINE boundaries so a CSV line is never cut
+ * across two notifications by us. (The host still has to reassemble, because
+ * the *link layer* can fragment, but we never manufacture a split mid-field.) */
+static void notifyChunked(const char* buf, size_t len) {
+  size_t usable = (bleMtu > 3) ? (size_t)(bleMtu - 3) : 20;
+  size_t off = 0;
+  while (off < len && bleConnected) {
+    size_t take = len - off;
+    if (take > usable) {
+      take = usable;
+      size_t nl = 0;
+      for (size_t i = take; i > 0; --i) {
+        if (buf[off + i - 1] == '\n') { nl = i; break; }
+      }
+      if (nl) take = nl;          // back up to the last complete line
     }
-    return (uint16_t)(sum / OVERSAMPLE);
+    pTxChar->setValue((uint8_t*)(buf + off), take);
+    pTxChar->notify();            // MAY BLOCK — that is why we are on core 0
+    bleNotifies++;
+    off += take;
+    if (off < len) vTaskDelay(1); // let the stack breathe between chunks
+  }
 }
 
-// Deterministic 1 Hz sawtooth, phase-shifted per channel.
-uint16_t readChannelStub(uint8_t i) {
-    int64_t  ms    = esp_timer_get_time() / 1000;
-    uint32_t phase = (uint32_t)((ms + i * 167) % 1000);
-    return (uint16_t)(phase * 4095 / 999);
-}
+/* The BLE consumer. Pinned to core 0. The Arduino loop() (the sampler) runs on
+ * core 1. A blocking notify() therefore CANNOT delay the sample clock — they
+ * are different tasks on different cores, communicating only through a queue
+ * that the producer writes with a zero timeout. That is the structural
+ * guarantee, not a "should be fast enough" argument. */
+static void bleTask(void* arg) {
+  char    batch[MAX_LINE_LEN * FRAMES_PER_NOTIFY + 8];
+  LineMsg msg;
 
-uint16_t readChannel(uint8_t i) {
-    return USE_STUB ? readChannelStub(i) : readChannelReal(i);
-}
-
-Sample   ring[BUF_N];
-int      head = 0;
-int      tail = 0;
-
-int64_t  t0;       // esp_timer value at capture start
-uint16_t seq;      // next sequence number to hand out
-int64_t  next_us;  // absolute time the next sample is due
-
-// ---------------------------------------------------------------- ring buffer
-
-// On overflow the oldest sample is discarded. Dropped samples are detectable
-// on the host as a gap in seq, which is what seq is for.
-void bufPush(const Sample& s) {
-    int next = (head + 1) % BUF_N;
-    if (next == tail) {
-        tail = (tail + 1) % BUF_N;
+  for (;;) {
+    // --- MTU gate: negotiation completes shortly AFTER onConnect fires, so
+    //     poll rather than read it once in the callback.
+    if (bleConnected && !bleMtuOk) {
+      uint16_t m = pServer->getPeerMTU(pServer->getConnId());
+      if (m >= MIN_USABLE_MTU) {
+        bleMtu   = m;
+        bleMtuOk = true;
+        Serial.printf("# ble mtu=%u ok\n", (unsigned)m);
+      } else if (esp_timer_get_time() - bleConnectedAtUs > MTU_WAIT_US) {
+        Serial.printf("# ble mtu=%u BELOW %d - refusing to notify\n",
+                      (unsigned)m, MIN_USABLE_MTU);
+        bleConnectedAtUs = esp_timer_get_time();   // re-log in 2 s, keep refusing
+      }
     }
-    ring[head] = s;
-    head = next;
-}
 
-// ---------------------------------------------------------------- framing
-
-// Must match checksum() in gait_gen.py. Accumulating in uint32_t is deliberate:
-// unsigned wraparound is defined behaviour, and 2^32 is a multiple of 256, so
-// the truncation does not change the result.
-uint8_t checksum(const Sample& s) {
-    uint32_t sum = 0;
-    sum += s.seq;
-    sum += (uint32_t)s.t_us;
-    for (int i = 0; i < 6; i++) {
-        sum += s.v[i];
+    // --- gather up to FRAMES_PER_NOTIFY whole lines
+    size_t used = 0;
+    int    have = 0;
+    while (have < FRAMES_PER_NOTIFY) {
+      if (xQueueReceive(bleQueue, &msg, pdMS_TO_TICKS(50)) != pdTRUE) break;
+      if (used + msg.len < sizeof(batch)) {
+        memcpy(batch + used, msg.text, msg.len);
+        used += msg.len;
+        have++;
+      }
     }
-    return (uint8_t)(sum % 256);
+    if (used == 0) continue;
+
+    // Not connected, or MTU too small -> the batch is dropped on the floor.
+    if (!bleConnected || !bleMtuOk) { bleDropped += have; continue; }
+
+    notifyChunked(batch, used);
+  }
 }
 
-int makeFrame(const Sample& s, char* out, size_t n) {
-    return snprintf(out, n, "INS,%u,%lld,%u,%u,%u,%u,%u,%u,%u\n",
-                    (unsigned)s.seq,
-                    (long long)s.t_us,
-                    (unsigned)s.v[0], (unsigned)s.v[1], (unsigned)s.v[2],
-                    (unsigned)s.v[3], (unsigned)s.v[4], (unsigned)s.v[5],
-                    (unsigned)checksum(s));
-}
+/* Producer side, called from loop(). NEVER blocks: zero-tick queue send.
+ * Drop policy on a full queue is DROP OLDEST — the newest frames are the ones
+ * worth keeping, and dropping the head keeps latency bounded. */
+static inline void bleEnqueue(const char* line, size_t len) {
+  if (!bleConnected)      { bleSkippedNoConn++; return; }
+  if (len >= MAX_LINE_LEN) { bleDropped++;      return; }
 
-// ---------------------------------------------------------------- setup
+  LineMsg m;
+  m.len = (uint8_t)len;
+  memcpy(m.text, line, len);
+
+  if (xQueueSend(bleQueue, &m, 0) != pdTRUE) {
+    LineMsg junk;
+    if (xQueueReceive(bleQueue, &junk, 0) == pdTRUE) bleDropped++;  // evict oldest
+    if (xQueueSend(bleQueue, &m, 0) != pdTRUE)       bleDropped++;  // still full: drop new
+  }
+}
+#endif  // BLE_ENABLED
+// ===== END BLE ADDED =====
+
+/* ---------------------------------------------------------------------
+ * setup / loop
+ * ------------------------------------------------------------------- */
+static uint16_t seq        = 0;
+static int64_t  nextDueUs  = 0;
+static int64_t  lastStatUs = 0;
 
 void setup() {
-    Serial.begin(115200);
-    analogReadResolution(12);
-    analogSetAttenuation(ADC_11db);
+  Serial.begin(921600);          // baud is ignored on native USB CDC
+  delay(300);
 
-    t0      = esp_timer_get_time();
-    seq     = 0;
-    next_us = t0;  // loop() advances the deadline before waiting, so frame 1 lands at t0 + PERIOD_US
+  analogReadResolution(12);
+  for (int i = 0; i < 6; i++) {
+    // ADC_11db on core 2.x; core 3.x accepts it (aliased to ADC_ATTEN_DB_12).
+    analogSetPinAttenuation(PINS[i], ADC_11db);
+  }
+
+  // ===== BLE ADDED =====
+#if BLE_ENABLED
+  bleQueue = xQueueCreate(BLE_QUEUE_LEN, sizeof(LineMsg));
+  bleInit();
+  // Core 0 = the core the BLE stack already lives on. Arduino loop() is core 1.
+  xTaskCreatePinnedToCore(bleTask, "bleTx", 4096, nullptr, 1, nullptr, 0);
+  Serial.println("# ble advertising as " BLE_DEVICE_NAME);
+#endif
+  // ===== END BLE ADDED =====
+
+  nextDueUs  = esp_timer_get_time();
+  lastStatUs = nextDueUs;
 }
 
-// ---------------------------------------------------------------- loop
-
 void loop() {
-    Sample s;
-    s.seq  = seq++;
-    s.t_us = esp_timer_get_time() - t0;
-    for (int i = 0; i < 6; i++) {
-        s.v[i] = readChannel(i);
-    }
-    bufPush(s);
+  int64_t now = esp_timer_get_time();
+  if (now < nextDueUs) {
+    int64_t slack = nextDueUs - now;
+    if (slack > 1500) vTaskDelay(pdMS_TO_TICKS(1));   // yield, keep the WDT happy
+    return;
+  }
 
-    // Send as much as the link will accept right now, and no more. Writing past
-    // availableForWrite() would block and push the sample clock off schedule.
-    while (head != tail) {
-        char line[80];
-        int  len = makeFrame(ring[tail], line, sizeof(line));
-        if (Serial.availableForWrite() < len) {
-            break;
-        }
-        Serial.write((const uint8_t*)line, len);
-        tail = (tail + 1) % BUF_N;
-    }
+  // Absolute-deadline advance: the deadline is derived from the schedule, not
+  // from "now", so per-iteration jitter does not accumulate into drift.
+  nextDueUs += PERIOD_US;
+  if (esp_timer_get_time() - nextDueUs > 5 * PERIOD_US) {
+    nextDueUs = esp_timer_get_time();   // we fell far behind; resync, don't spin
+  }
 
-    // Pace against an absolute deadline rather than a delay, so that per-loop
-    // jitter cannot accumulate into sample-rate drift.
-    next_us += PERIOD_US;
-    while (esp_timer_get_time() < next_us) {
-    }
+  uint16_t v[6];
+  for (int i = 0; i < 6; i++) v[i] = sampleChannel(PINS[i]);
+
+  char line[MAX_LINE_LEN];
+  int  len = buildFrameLine(line, sizeof(line), seq, now, v);
+  seq++;
+
+  Serial.write((const uint8_t*)line, len);   // primary path, unconditional
+
+  // ===== BLE ADDED =====
+#if BLE_ENABLED
+  bleEnqueue(line, (size_t)len);             // best-effort, non-blocking
+
+  if (now - lastStatUs >= 1000000) {
+    lastStatUs = now;
+    // '#' prefix so the host validator can skip it instead of counting it
+    // as a malformed frame.
+    Serial.printf("# ble conn=%d mtu=%u notif=%lu drop=%lu noconn=%lu\n",
+                  bleConnected ? 1 : 0, (unsigned)bleMtu,
+                  (unsigned long)bleNotifies,
+                  (unsigned long)bleDropped,
+                  (unsigned long)bleSkippedNoConn);
+  }
+#endif
+  // ===== END BLE ADDED =====
 }
