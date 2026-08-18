@@ -8,10 +8,12 @@ The wire format between board and host is specified in
 [framespec.md](framespec.md). That document is the contract; the firmware, the
 host logger, and the simulator all implement it and must not diverge from it.
 
-**Status:** pre-hardware. The firmware, frame codec, host logger, and analysis
-pipeline are written and exercised end to end against a simulator. Sensors are
-not yet attached, so the ADC pin mapping and the physical sensor coordinates
-are provisional (see [Open items](#open-items)).
+**Status:** board assembled, bring-up in progress. The firmware, frame codec,
+host logger, and analysis pipeline are written and exercised end to end against
+a simulator. The board is soldered and the ADC pin mapping is confirmed against
+it; the physical sensor coordinates and every `RETUNE` threshold are still
+provisional, because those need measurement rather than assembly (see
+[Open items](#open-items)).
 
 ## Repository layout
 
@@ -20,9 +22,12 @@ are provisional (see [Open items](#open-items)).
 | [framespec.md](framespec.md) | Wire-format specification. Frame layout, checksum, sample rate, validation gates, design rationale. |
 | [firmware/insole/](firmware/insole/) | Arduino sketch for the ESP32-S3. Samples six channels, frames them, paces the sample clock against an absolute deadline. |
 | [read_serial.py](read_serial.py) | Host logger. Reads frames from the serial port, validates them, writes `readings.csv`. |
-| [gait_gen.py](gait_gen.py) | Frame codec (`make_frame`, `parse_frame`, `checksum`) plus a synthetic gait generator for hardware-free work. |
+| [gait_gen.py](gait_gen.py) | Frame codec (`make_frame`, `parse_frame`, `checksum`) plus a synthetic gait generator for hardware-free work. Also supplies `true_stances`, the ground truth the detector is scored against. |
+| [make_sessions.py](make_sessions.py) | Multi-session dataset generator. One file per (class, session), seeded per class, for session-disjoint train/test splits. |
+| [detector.py](detector.py) | Stance detection: `find_stances`, `merge_close`, `stance_report`, plus the `SENSOR_COLS` / `SENSOR_COORDS` definitions and the tuning constants. Single source for all of these. |
 | [heatmap.py](heatmap.py) | Foot-pressure field rendering and per-stance animation. |
 | [insole.ipynb](insole.ipynb) | Analysis pipeline: load, clean, window, stance detection, feature extraction, centre of pressure, plots. |
+| [test_stances.py](test_stances.py) | Detector tests: `true_stances` cadence scaling, `merge_close` behaviour, and a five-stream scorecard asserting detected-vs-truth counts. |
 | [sim/test_parse_frame.py](sim/test_parse_frame.py) | Parser test cases covering each rejection path in framespec.md section 8. |
 | [scripts/](scripts/) | Bench utilities: noise-baseline capture and per-channel noise statistics. |
 
@@ -75,29 +80,41 @@ board attached.
 python gait_gen.py
 ```
 
-Writes two 60-second captures at 100 Hz:
+Writes five 60-second captures at 100 Hz:
 
 | File | Stride period | Purpose |
 | --- | --- | --- |
 | `sim_walk.txt` | 1.0 s | Baseline walking cadence. |
 | `sim_fast.txt` | 0.6 s | Faster cadence, for class separation in the feature plots. |
+| `sim_shuffle.txt` | 0.5 s | Short, lightly loaded strides. Catches a `MIN_DURATION` set high enough to annihilate brief stances. |
+| `sim_dropout.txt` | 1.0 s | Walk with channel 0 dead from 20 s to 40 s. A disconnected FSR reads flat zero, not noisy zero. |
+| `sim_stand.txt` | n/a | Static load, no steps. Truth is `[]`, so any detection is a false positive. |
 
-Cadence is a parameter, not an edited constant: `gait_lines(duration_s,
-mode="walk", cycle_s=CYCLE_S)` threads `cycle_s` down to `sensor_value`, so two
-captures at different cadences come from the same code path and their
-provenance is recoverable from the call site.
+The last three are adversarial on purpose: each one fails loudly for a
+different mis-set detector constant, which a walk-only fixture would not catch.
 
-Sensor noise is drawn from an unseeded `random.gauss`, so repeated runs produce
-statistically equivalent but byte-different files.
+Cadence is a parameter, not an edited constant. `cycle_s` defaults to `None`
+and is resolved by `resolve_cycle(mode, cycle_s)`: an explicit value always
+wins, otherwise the mode picks the default (0.5 s for `shuffle`, `CYCLE_S`
+otherwise). `sensor_value` and `true_stances` resolve on entry and `gait_lines`
+forwards untouched, so one call site controls cadence and passing an explicit
+`cycle_s` is never silently overridden.
 
-To verify the parser against every rejection path in the spec:
+Sensor noise is drawn from an unseeded `random.gauss`, so repeated runs of
+`gait_gen.py` produce statistically equivalent but byte-different files.
+`make_sessions.py` is the exception: it seeds per class, so its sessions
+rebuild byte-identical and are therefore gitignored rather than committed.
+
+To verify the parser against every rejection path in the spec, and the detector
+against the five streams:
 
 ```
 python sim/test_parse_frame.py
+python test_stances.py
 ```
 
-Nine cases, run from the repository root. Each prints `PASS` or `FAIL` with the
-offending line.
+Nine parser cases and fifteen detector assertions, both run from the repository
+root. Each prints `PASS` or `FAIL` and exits non-zero on any failure.
 
 ## Capture from hardware
 
@@ -192,26 +209,32 @@ region between sensors should be treated accordingly.
 
 ## Data files
 
-Captures are excluded from version control by [.gitignore](.gitignore): `data/`
-and all `*.csv`. Simulator output (`sim_walk.txt`, `sim_fast.txt`) is committed,
-because it is generated from code in this repository and is small enough to be
-useful as a fixture.
+Excluded from version control by [.gitignore](.gitignore): `data/`, all `*.csv`,
+and the generated `sim_<label>_<NN>.txt` sessions from `make_sessions.py`.
 
-Notebook cells reference `readings.csv` and `readings_fast.csv`, neither of
-which is tracked. Regenerate them from the simulator captures, or supply your
-own, before running the notebook top to bottom.
+The five unnumbered `sim_*.txt` from `gait_gen.py` are committed. They are
+small, generated from code in this repository, and load-bearing in two places:
+`test_stances.py` scores against them, and the notebook's Colab bootstrap
+rebuilds every `sim_*.csv` from them after a fresh clone. Ignoring them would
+leave a clone with nothing to rebuild from.
+
+Nothing in the pipeline reads `readings.csv` any more; that name is reserved
+for raw hardware capture from [read_serial.py](read_serial.py). The notebook
+reads the `sim_*.csv` its bootstrap regenerates and writes features to
+`features_walk.csv`.
 
 ## Open items
 
-- ADC1 pin to sensor mapping (six of GPIO1-GPIO10), pending hardware assembly.
-  `PINS` in the sketch is provisional and marked `TODO`.
 - Physical FSR placement to be confirmed against the channel order in
   framespec.md section 3, and `SENSOR_COORDS` updated to measured positions.
-- Stance thresholds `T_ON`, `T_OFF`, and `MIN_DURATION` are tuned against
-  simulated data and marked `RETUNE`. They need re-tuning against a real
-  capture and a real noise floor.
-- `true_stances` still reads the module-level `CYCLE_S` rather than taking a
-  `cycle_s` parameter, so ground truth is only correct for default-cadence
-  captures.
+  Assembly fixed which GPIO carries which channel; it did not measure where on
+  the foot each sensor physically sits, which is what CoP depends on.
+- Stance thresholds `T_ON`, `T_OFF`, `MIN_DURATION`, `MAX_DURATION`, and
+  `GAP_MERGE` are tuned against simulated data and marked `RETUNE`. They need
+  re-tuning against a real capture and a real noise floor. Every stance count in
+  `test_stances.py` is a fixture of the simulator, not evidence about hardware.
+- The simulator's gait model (sine-shaped load over fixed phase windows) is an
+  assumption about foot loading, not a measurement. The detector currently only
+  proves it works against that assumption.
 - framespec.md refers to `host/read_serial.py` and `sim/gait_gen.py`; both now
   live at the repository root.
