@@ -10,21 +10,35 @@ Everything below make_source() is transport-agnostic: it consumes an iterator
 of strings and does not know or care where they came from.
 
     pip install pyserial bleak
+
+Usage:
+    read_serial.py                          live BLE  -> readings.csv
+    read_serial.py --source serial          live USB  -> readings.csv
+    read_serial.py in.txt out.csv           replay a saved capture
+    read_serial.py --source file in.txt out.csv
+
+Both paths are optional. --source defaults to "file" when an input path is
+given and "ble" otherwise, so the notebook's
+`read_serial.py sim_walk.txt sim_walk.csv` works with no flags.
 """
 
 import sys
 import time
 import csv
+import argparse
 
 # ---------------------------------------------------------------------------
-# Configuration (constants, not CLI args — matches the existing style)
+# Configuration. These are DEFAULTS for the CLI below, not the live values —
+# nothing downstream reads them at runtime. In particular no function takes one
+# as a default argument value: that binds at import time and cannot be
+# overridden by assigning to the module attribute afterwards.
 # ---------------------------------------------------------------------------
-SOURCE     = "ble"          # "serial" | "file" | "ble"
+DEFAULT_SOURCE = "ble"      # "serial" | "file" | "ble"
 
-PORT       = "COM7"         # SOURCE == "serial"
+PORT       = "COM7"         # --source serial
 BAUD       = 921600
-IN_FILE    = "capture.txt"  # SOURCE == "file"
-BLE_NAME   = "INSOLE"       # SOURCE == "ble"
+IN_FILE    = "capture.txt"  # --source file, when no in_path is given
+BLE_NAME   = "INSOLE"       # --source ble
 
 DURATION_S = 60
 OUT_CSV    = "readings.csv"
@@ -63,7 +77,7 @@ def serial_lines(port=PORT, baud=BAUD, duration_s=DURATION_S):
         ser.close()
 
 
-def file_lines(path=IN_FILE):
+def file_lines(path):
     with open(path, "r") as f:
         for raw in f:
             yield raw.strip()
@@ -147,21 +161,30 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
         yield item
 
 
-def make_source():
-    if SOURCE == "serial":
-        return serial_lines()
-    if SOURCE == "file":
-        return file_lines()
-    if SOURCE == "ble":
-        return ble_lines()
-    raise ValueError(f"unknown SOURCE {SOURCE!r}")
+def make_source(source, in_path=None, duration_s=DURATION_S):
+    if source == "serial":
+        return serial_lines(duration_s=duration_s)
+    if source == "file":
+        if in_path is None:
+            raise ValueError("source 'file' requires an input path")
+        return file_lines(in_path)
+    if source == "ble":
+        return ble_lines(duration_s=duration_s)
+    raise ValueError(f"unknown source {source!r}")
 
 
 # ---------------------------------------------------------------------------
 # Frame validation
 # ---------------------------------------------------------------------------
 def parse_frame(line):
-    """Return (row, reason). row is None when the line is not a valid frame."""
+    """Return (row, reason). row is None when the line is not a valid frame.
+
+    A leading '#' is a firmware status line (`# ble conn=... mtu=...`), not
+    corruption. Tolerating it here as well as in main() means a direct caller
+    of parse_frame() gets the same answer the capture loop does.
+    """
+    if line.startswith("#"):
+        return None, "status"
     parts = line.split(",")
     if len(parts) != 10 or parts[0] != "INS":
         return None, "malformed"
@@ -184,19 +207,46 @@ def parse_frame(line):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main():
+def build_parser():
+    p = argparse.ArgumentParser(
+        description="Capture insole frames from USB serial, BLE, or a saved file.")
+    p.add_argument("in_path", nargs="?", default=None,
+                   help="capture to replay; giving it implies --source file")
+    p.add_argument("out_path", nargs="?", default=OUT_CSV,
+                   help=f"output CSV (default: {OUT_CSV})")
+    p.add_argument("--source", choices=("serial", "file", "ble"), default=None,
+                   help="transport; defaults to 'file' when in_path is given, "
+                        "else '%s'" % DEFAULT_SOURCE)
+    return p
+
+
+def resolve_args(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.source is None:
+        args.source = "file" if args.in_path else DEFAULT_SOURCE
+    if args.source == "file" and args.in_path is None:
+        args.in_path = IN_FILE
+    if args.source != "file" and args.in_path is not None:
+        build_parser().error(
+            f"in_path is only meaningful with --source file, got --source {args.source}")
+    return args
+
+
+def main(argv=None):
+    args = resolve_args(argv)
+
     c = dict(valid=0, malformed=0, empty=0, bad_checksum=0,
              seq_breaks=0, timing_breaks=0, status=0, lost=0)
 
     prev_seq = None
     prev_ts = None
 
-    with open(OUT_CSV, "w", newline="") as f:
+    with open(args.out_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(CSV_HEADER)
 
         t0 = time.time()
-        for line in make_source():
+        for line in make_source(args.source, args.in_path):
             if time.time() - t0 > DURATION_S + 5:
                 break
 
@@ -236,16 +286,16 @@ def main():
     expected_total = c["valid"] + c["lost"]
     loss_pct = (100.0 * c["lost"] / expected_total) if expected_total else 0.0
 
-    print(f"source={SOURCE} valid={c['valid']} malformed={c['malformed']} "
+    print(f"source={args.source} valid={c['valid']} malformed={c['malformed']} "
           f"empty={c['empty']} bad_checksum={c['bad_checksum']} "
           f"seq_breaks={c['seq_breaks']} lost={c['lost']} "
           f"loss={loss_pct:.2f}% timing_breaks={c['timing_breaks']} "
           f"status={c['status']}")
 
-    sys.exit(exit_code(c, loss_pct))
+    return exit_code(c, loss_pct, args.source)
 
 
-def exit_code(c, loss_pct):
+def exit_code(c, loss_pct, source):
     """Transport-aware gating.
 
     Two classes of anomaly, and they are not the same kind of thing:
@@ -269,7 +319,7 @@ def exit_code(c, loss_pct):
         print("FAIL: no valid frames")
         return 1
 
-    if SOURCE == "ble":
+    if source == "ble":
         if loss_pct > BLE_LOSS_TOLERANCE_PCT:
             print(f"FAIL: BLE frame loss {loss_pct:.2f}% "
                   f"exceeds tolerance {BLE_LOSS_TOLERANCE_PCT}%")
@@ -288,4 +338,7 @@ def exit_code(c, loss_pct):
 
 
 if __name__ == "__main__":
-    main()
+    # main() returns the code rather than calling sys.exit() itself, so every
+    # FAIL branch in exit_code() lands here and every failure leaves a nonzero
+    # status. It also makes main() callable in-process without SystemExit.
+    sys.exit(main())
