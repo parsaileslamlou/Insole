@@ -67,11 +67,13 @@ def fit_qda(X, y, reg=0.0, tol=RANK_TOL):
             raise DegenerateClassError(
                 f"class {str(c)!r} has {counts[i]} sample(s); QDA needs at least 2 "
                 f"to estimate a covariance (divides by n_k - 1)")
-        if counts[i] < p:
+        if counts[i] <= p:
             raise DegenerateClassError(
                 f"class {str(c)!r} has {counts[i]} samples for {p} features; its "
-                f"covariance cannot have full rank. Reduce the feature count, "
-                f"pool with LDA, or pass reg > 0")
+                f"covariance cannot have full rank. n_k centered points span at "
+                f"most n_k - 1 dimensions, so n_k must exceed p, not merely "
+                f"reach it. Reduce the feature count, pool with LDA, or pass "
+                f"reg > 0")
 
     covs = []
     for i, c in enumerate(classes):

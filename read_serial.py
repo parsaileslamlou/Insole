@@ -123,7 +123,6 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
         dev = await BleakScanner.find_device_by_name(device_name, timeout=15.0)
         if dev is None:
             print(f"BLE: no device named {device_name!r} found")
-            out.put(SENTINEL)
             return
 
         disconnected = asyncio.Event()
@@ -150,9 +149,27 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
                 pass
 
         # buf may still hold a partial line here. It is dropped on purpose.
-        out.put(SENTINEL)
 
-    threading.Thread(target=lambda: asyncio.run(_run()), daemon=True).start()
+    def _pump():
+        """Run _run() and guarantee the consumer is released, however it ends.
+
+        _run() used to queue SENTINEL itself on each of its exit paths. Any
+        path it did not cover -- a bleak connection error, a raise inside the
+        notify callback -- left the consumer blocked on out.get() forever:
+        a hang with no exit code at all, which is strictly worse than a FAIL.
+        The sentinel is now queued in exactly one place, a finally, so no
+        future exit path can miss it.
+
+        The reassembly contract in on_notify() is untouched.
+        """
+        try:
+            asyncio.run(_run())
+        except Exception as exc:                 # noqa: BLE001 - report, never hang
+            print(f"BLE: capture thread failed: {exc!r}")
+        finally:
+            out.put(SENTINEL)
+
+    threading.Thread(target=_pump, daemon=True).start()
 
     while True:
         item = out.get()
