@@ -62,6 +62,14 @@ NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 SENSOR_COLS = ["s0", "s1", "s2", "s3", "s4", "s5"]
 CSV_HEADER  = ["seq", "ts_us"] + SENSOR_COLS
 
+# Lines a source produced but could not hand to the consumer. Raised by any
+# source that has a producer thread and a hand-off queue between it and main();
+# ble_lines is the only one with such a queue today, but nothing about this is
+# BLE-specific and main() prints it without knowing which transport filled it.
+# A dict rather than a plain int so a source can mutate it without needing a
+# `global` declaration. Reset by main().
+SOURCE_DROPS = {"n": 0}
+
 
 # ---------------------------------------------------------------------------
 # Line sources
@@ -104,6 +112,8 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
       * At disconnect the trailing partial line is DISCARDED, never emitted.
         Emitting it would produce a short frame that fails the checksum and
         looks like corruption.
+      * The hand-off to the consumer never blocks. If the queue is full the
+        line is dropped and counted in SOURCE_DROPS, never waited on.
     """
     import asyncio
     import threading
@@ -124,8 +134,28 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
             chunk = bytes(buf[:nl + 1])
             del buf[:nl + 1]                 # keep the partial tail
             for raw in chunk.split(b"\n"):
-                if raw:
-                    out.put(raw.decode("ascii", errors="ignore").strip())
+                if not raw:
+                    continue
+                try:
+                    out.put_nowait(
+                        raw.decode("ascii", errors="ignore").strip())
+                except _queue.Full:
+                    # This runs on the asyncio event-loop thread. The
+                    # blocking put() that used to be here would stall
+                    # that thread, which stops notifications being
+                    # serviced -- so a stalled consumer costs frames
+                    # either way. The difference is that blocking loses
+                    # them invisibly, as a gap indistinguishable from
+                    # radio loss, while this loses them with a number
+                    # attached. maxsize=20000 is ~200 s at 100 Hz, so a
+                    # 60 s capture should never reach here; if it does,
+                    # the consumer is the problem and the count says so.
+                    #
+                    # These lines still show up downstream as seq gaps,
+                    # so they are already gated by the normal loss
+                    # check. The counter is what separates "the radio
+                    # dropped them" from "we dropped them ourselves".
+                    SOURCE_DROPS["n"] += 1
 
         # Discovery is timed and reported separately from the capture. It can
         # burn the full 15 s, and charging that against the capture window is
@@ -318,6 +348,8 @@ def main(argv=None):
     c = dict(valid=0, malformed=0, empty=0, bad_checksum=0,
              seq_breaks=0, timing_breaks=0, status=0, lost=0)
 
+    SOURCE_DROPS["n"] = 0       # per run, so an in-process second call is clean
+
     prev_seq = None
     prev_ts = None
 
@@ -395,8 +427,16 @@ def main(argv=None):
           f"empty={c['empty']} bad_checksum={c['bad_checksum']} "
           f"seq_breaks={c['seq_breaks']} lost={c['lost']} "
           f"loss={loss_pct:.2f}% timing_breaks={c['timing_breaks']} "
-          f"status={c['status']} "
+          f"status={c['status']} source_drops={SOURCE_DROPS['n']} "
           f"capture_s={capture_s:.1f} device_s={device_s:.1f}")
+
+    # source_drops is the host throwing lines away because its own hand-off
+    # queue was full -- our fault, not the radio's. It is reported rather than
+    # gated because the frames it loses already reach exit_code() as seq gaps.
+    # Saying so explicitly stops a full queue being read as a bad link.
+    if SOURCE_DROPS["n"]:
+        print(f"NOTE: {SOURCE_DROPS['n']} lines dropped at the source hand-off "
+              f"(consumer could not keep up); they are counted in lost above")
 
     # A short session should be visible, not inferred from a low frame count.
     # Reporting only -- it does not change the exit code. Live sources only:
