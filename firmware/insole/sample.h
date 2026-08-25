@@ -1,5 +1,10 @@
 #pragma once
 
+// INACTIVE. insole.ino sets USE_LOCAL_SAMPLE_HELPERS 1, so its
+// `#include "sample.h"` sits behind `#if !USE_LOCAL_SAMPLE_HELPERS` and never
+// fires; the live sampleChannel()/buildFrameLine() are in the sketch. Kept
+// rather than deleted so flipping that switch back to 0 still compiles.
+
 #include <stdint.h>
 
 // One instant of capture: sequence number, timestamp, six channel readings.

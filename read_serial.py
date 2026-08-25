@@ -120,9 +120,15 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
                 if raw:
                     out.put(raw.decode("ascii", errors="ignore").strip())
 
+        # Discovery is timed and reported separately from the capture. It can
+        # burn the full 15 s, and charging that against the capture window is
+        # what used to make a requested 60 s run quietly yield far less.
+        t_scan0 = time.monotonic()
         dev = await BleakScanner.find_device_by_name(device_name, timeout=15.0)
+        scan_s = time.monotonic() - t_scan0
         if dev is None:
-            print(f"BLE: no device named {device_name!r} found")
+            print(f"BLE: no device named {device_name!r} found "
+                  f"(scanned {scan_s:.1f}s)")
             return
 
         disconnected = asyncio.Event()
@@ -135,14 +141,20 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
                 mtu = client.mtu_size
             except Exception:
                 mtu = "unavailable"
-            print(f"BLE: connected to {device_name}, negotiated MTU = {mtu}")
+            print(f"BLE: connected to {device_name} after {scan_s:.1f}s "
+                  f"discovery, negotiated MTU = {mtu}")
 
+            # The notify window opens here, AFTER discovery and connect, so it
+            # gets the full duration_s it was asked for.
+            t_notify0 = time.monotonic()
             await client.start_notify(NUS_TX_UUID, on_notify)
             try:
                 await asyncio.wait_for(disconnected.wait(), timeout=duration_s)
                 print("BLE: peripheral disconnected before the duration elapsed")
             except asyncio.TimeoutError:
                 pass                          # normal end of capture
+            print(f"BLE: notify window {time.monotonic() - t_notify0:.1f}s "
+                  f"(requested {duration_s}s)")
             try:
                 await client.stop_notify(NUS_TX_UUID)
             except Exception:
@@ -258,13 +270,26 @@ def main(argv=None):
     prev_seq = None
     prev_ts = None
 
+    t_first = None      # host clock at the first line of any kind
+    t_last = None       # host clock at the last valid frame
+    first_ts = None     # device clock (ts_us) at the first valid frame
+    last_ts = None      # device clock at the last valid frame
+
     with open(args.out_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(CSV_HEADER)
 
-        t0 = time.time()
         for line in make_source(args.source, args.in_path):
-            if time.time() - t0 > DURATION_S + 5:
+            now = time.time()
+            # This guard exists to stop a live source that never ends. It runs
+            # from the FIRST LINE, not from process start, so time spent
+            # discovering and connecting is not charged against the capture
+            # window -- that is what silently shortened BLE runs. Anchoring on
+            # the first line is transport-agnostic on purpose: serial_lines()
+            # also burns a second on boot chatter before its first line.
+            if t_first is None:
+                t_first = now
+            elif now - t_first > DURATION_S + 5:
                 break
 
             if not line:
@@ -297,17 +322,37 @@ def main(argv=None):
                         c["timing_breaks"] += 1
 
             prev_seq, prev_ts = seq, ts_us
+            if first_ts is None:
+                first_ts = ts_us
+            last_ts, t_last = ts_us, now
             c["valid"] += 1
             w.writerow([seq, ts_us] + vals)
 
     expected_total = c["valid"] + c["lost"]
     loss_pct = (100.0 * c["lost"] / expected_total) if expected_total else 0.0
 
+    # Two spans, deliberately both reported, because they are different clocks:
+    #   capture_s  host wall clock, first valid frame -> last. What the session
+    #              actually cost, and the number to compare against DURATION_S.
+    #   device_s   the board's own ts_us span. Immune to transport jitter and
+    #              batching, so a gap between the two is a link story, not a
+    #              sampling story.
+    capture_s = (t_last - t_first) if (t_first is not None and t_last is not None) else 0.0
+    device_s = ((last_ts - first_ts) / 1e6) if (first_ts is not None and last_ts is not None) else 0.0
+
     print(f"source={args.source} valid={c['valid']} malformed={c['malformed']} "
           f"empty={c['empty']} bad_checksum={c['bad_checksum']} "
           f"seq_breaks={c['seq_breaks']} lost={c['lost']} "
           f"loss={loss_pct:.2f}% timing_breaks={c['timing_breaks']} "
-          f"status={c['status']}")
+          f"status={c['status']} "
+          f"capture_s={capture_s:.1f} device_s={device_s:.1f}")
+
+    # A short session should be visible, not inferred from a low frame count.
+    # Reporting only -- it does not change the exit code. Live sources only:
+    # a file replay finishes in well under DURATION_S by design.
+    if args.source != "file" and capture_s < DURATION_S - 1.0:
+        print(f"NOTE: capture ran {capture_s:.1f}s, {DURATION_S - capture_s:.1f}s "
+              f"short of the requested {DURATION_S}s")
 
     return exit_code(c, loss_pct, args.source)
 

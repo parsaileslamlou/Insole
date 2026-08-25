@@ -28,6 +28,7 @@
                        // include AND the addDescriptor() line below; core 3.x
                        // attaches the CCCD automatically. A *deprecation warning*
                        // is fine — ignore it.
+#include <stdarg.h>     // bleLog() is variadic; see the Serial-ownership note.
 // ===== END BLE ADDED =====
 
 /* ---------------------------------------------------------------------
@@ -53,12 +54,18 @@ const bool    USE_STUB    = false;
 
 #define MAX_LINE_LEN 72   // worst-case frame is ~57 bytes + NUL
 
+// buildFrameLine() hit the buffer limit. Not a BLE counter — it belongs to the
+// serial framing path, and it is nonzero only if the frame format outgrew
+// MAX_LINE_LEN. Surfaced in the 1 Hz status line.
+static volatile uint32_t frameTruncs = 0;
+
 // ===== BLE ADDED =====
 #define BLE_ENABLED        1
 #define BLE_DEVICE_NAME    "INSOLE"
 #define FRAMES_PER_NOTIFY  3      // compile-time, per the spec decision
 #define MIN_USABLE_MTU     100    // refuse to notify below this
 #define BLE_QUEUE_LEN      64     // ~0.64 s of slack at 100 Hz
+#define LOG_QUEUE_LEN      4      // core-0 diagnostics awaiting core 1's Serial
 #define MTU_WAIT_US        2000000LL  // how long to wait for MTU negotiation
 
 // Nordic UART Service — standard UUIDs, not custom.
@@ -72,6 +79,7 @@ typedef struct {
 } LineMsg;
 
 static QueueHandle_t       bleQueue          = nullptr;
+static QueueHandle_t       logQueue          = nullptr;
 static BLEServer*          pServer           = nullptr;
 static BLECharacteristic*  pTxChar           = nullptr;
 static volatile bool       bleConnected      = false;
@@ -81,6 +89,7 @@ static volatile int64_t    bleConnectedAtUs  = 0;
 static volatile uint32_t   bleDropped        = 0;  // queue-full drops
 static volatile uint32_t   bleSkippedNoConn  = 0;  // frames not offered (no link)
 static volatile uint32_t   bleNotifies       = 0;  // notify() calls issued
+static volatile uint32_t   bleRefused        = 0;  // size/MTU invariant failed
 // ===== END BLE ADDED =====
 
 /* ---------------------------------------------------------------------
@@ -111,9 +120,20 @@ static int buildFrameLine(char* out, size_t n, uint16_t seq, int64_t ts_us,
   for (int i = 0; i < 6; i++) sum += v[i];
   uint8_t ck = (uint8_t)(sum & 0xFF);
 
-  return snprintf(out, n, "INS,%u,%lld,%u,%u,%u,%u,%u,%u,%u\n",
-                  (unsigned)seq, (long long)ts_us,
-                  v[0], v[1], v[2], v[3], v[4], v[5], (unsigned)ck);
+  int want = snprintf(out, n, "INS,%u,%lld,%u,%u,%u,%u,%u,%u,%u\n",
+                      (unsigned)seq, (long long)ts_us,
+                      v[0], v[1], v[2], v[3], v[4], v[5], (unsigned)ck);
+
+  // snprintf() returns the length it WANTED to write, not the length it wrote.
+  // Handing that straight to Serial.write() walks off the end of a 72-byte
+  // stack buffer and puts whatever follows it on the wire. Clamp to what is
+  // actually in the buffer -- snprintf NUL-terminates at out[n-1], so n-1 bytes
+  // of payload landed -- and count it: a truncation here means the frame format
+  // grew without MAX_LINE_LEN growing with it, which is a build-time error
+  // wearing a runtime disguise.
+  if (want < 0)          { frameTruncs++; return 0; }
+  if ((size_t)want >= n) { frameTruncs++; return (int)(n - 1); }
+  return want;
 }
 #endif
 
@@ -163,16 +183,78 @@ static void bleInit() {
   BLEAdvertising* adv = BLEDevice::getAdvertising();
   adv->addServiceUUID(NUS_SERVICE_UUID);   // so nRF Connect shows "Nordic UART Service"
   adv->setScanResponse(true);
-  adv->setMinPreferred(0x06);              // conservative conn-interval hint
-  adv->setMinPreferred(0x12);
+  // Preferred connection interval, in 1.25 ms units: 0x06 = 7.5 ms (the BLE
+  // floor), 0x12 = 22.5 ms. The second call used to be setMinPreferred as well,
+  // so it overwrote the first and the range was never expressed. At 100 Hz with
+  // FRAMES_PER_NOTIFY=3 we need ~33 notifications/s, one every ~30 ms, so the
+  // 22.5 ms ceiling is the whole point of the hint. It stays a hint: the
+  // central picks the actual interval.
+  adv->setMinPreferred(0x06);
+  adv->setMaxPreferred(0x12);
   BLEDevice::startAdvertising();
+}
+
+/* Core-0 diagnostics go through here. Core 0 never touches Serial directly.
+ *
+ * Two cores writing one USB CDC peripheral with no mutual exclusion can
+ * interleave mid-line, and the victim is a *serial* data frame -- so it
+ * surfaces on the host as a random checksum failure during a walking trial,
+ * pointing nowhere near the logging that caused it. Serial is therefore owned
+ * by core 1: core 0 formats into a queue message and moves on.
+ *
+ * A mutex was the alternative and was rejected. Serial.write() on native USB
+ * CDC blocks when the host is not draining, so a mutex held by core 0 could be
+ * waited on by core 1 inside the frame-emit path -- exactly the coupling the
+ * core split exists to prevent.
+ *
+ * Zero-timeout send, drop on full: a diagnostic is never worth stalling the
+ * BLE consumer for. */
+static void bleLog(const char* fmt, ...) {
+  if (!logQueue) return;
+
+  LineMsg m;
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(m.text, MAX_LINE_LEN, fmt, ap);
+  va_end(ap);
+
+  if (n < 0) return;
+  if (n >= MAX_LINE_LEN) n = MAX_LINE_LEN - 1;   // same clamp rule as above
+  m.len = (uint8_t)n;
+
+  xQueueSend(logQueue, &m, 0);   // never blocks; a lost log line is acceptable
 }
 
 /* Send a buffer, splitting on NEWLINE boundaries so a CSV line is never cut
  * across two notifications by us. (The host still has to reassemble, because
- * the *link layer* can fragment, but we never manufacture a split mid-field.) */
-static void notifyChunked(const char* buf, size_t len) {
-  size_t usable = (bleMtu > 3) ? (size_t)(bleMtu - 3) : 20;
+ * the *link layer* can fragment, but we never manufacture a split mid-field.)
+ *
+ * Returns false if nothing was sent because an invariant did not hold. The
+ * caller owns the accounting, because only it knows how many frames the buffer
+ * held.
+ *
+ * Two changes make the mid-line cut unreachable by construction rather than by
+ * luck:
+ *
+ *   1. bleMtu is latched into a local ONCE, here. onDisconnect() zeroes it from
+ *      the callback context, so re-reading it inside the walk could drop
+ *      `usable` to the old 20-byte floor partway through a buffer already sized
+ *      against a negotiated 100+ byte MTU -- and a 20-byte window is narrower
+ *      than a frame, so every chunk after that point would be a fragment.
+ *
+ *   2. MIN_USABLE_MTU (100) - 3 = 97 usable bytes, and bleEnqueue() refuses any
+ *      line >= MAX_LINE_LEN (72). A whole line therefore always fits in one
+ *      chunk, so a window that starts on a line boundary always contains a
+ *      newline. If one somehow does not, the frame format has outgrown the MTU
+ *      floor: that is a configuration error, so refuse the batch and count it
+ *      rather than putting a fragment on the wire for the host to splice into a
+ *      syntactically valid frame carrying wrong values. */
+static bool notifyChunked(const char* buf, size_t len) {
+  const uint16_t mtu = bleMtu;               // latch once -- see (1)
+  if (mtu < MIN_USABLE_MTU) return false;    // disconnected under us
+
+  const size_t usable = (size_t)(mtu - 3);
+
   size_t off = 0;
   while (off < len && bleConnected) {
     size_t take = len - off;
@@ -182,7 +264,8 @@ static void notifyChunked(const char* buf, size_t len) {
       for (size_t i = take; i > 0; --i) {
         if (buf[off + i - 1] == '\n') { nl = i; break; }
       }
-      if (nl) take = nl;          // back up to the last complete line
+      if (!nl) return false;      // see (2): never emit a fragment
+      take = nl;                  // back up to the last complete line
     }
     pTxChar->setValue((uint8_t*)(buf + off), take);
     pTxChar->notify();            // MAY BLOCK — that is why we are on core 0
@@ -190,6 +273,7 @@ static void notifyChunked(const char* buf, size_t len) {
     off += take;
     if (off < len) vTaskDelay(1); // let the stack breathe between chunks
   }
+  return true;
 }
 
 /* The BLE consumer. Pinned to core 0. The Arduino loop() (the sampler) runs on
@@ -209,10 +293,10 @@ static void bleTask(void* arg) {
       if (m >= MIN_USABLE_MTU) {
         bleMtu   = m;
         bleMtuOk = true;
-        Serial.printf("# ble mtu=%u ok\n", (unsigned)m);
+        bleLog("# ble mtu=%u ok\n", (unsigned)m);
       } else if (esp_timer_get_time() - bleConnectedAtUs > MTU_WAIT_US) {
-        Serial.printf("# ble mtu=%u BELOW %d - refusing to notify\n",
-                      (unsigned)m, MIN_USABLE_MTU);
+        bleLog("# ble mtu=%u BELOW %d - refusing to notify\n",
+               (unsigned)m, MIN_USABLE_MTU);
         bleConnectedAtUs = esp_timer_get_time();   // re-log in 2 s, keep refusing
       }
     }
@@ -222,18 +306,31 @@ static void bleTask(void* arg) {
     int    have = 0;
     while (have < FRAMES_PER_NOTIFY) {
       if (xQueueReceive(bleQueue, &msg, pdMS_TO_TICKS(50)) != pdTRUE) break;
-      if (used + msg.len < sizeof(batch)) {
-        memcpy(batch + used, msg.text, msg.len);
-        used += msg.len;
-        have++;
+      if (used + msg.len >= sizeof(batch)) {
+        // Unreachable at the current FRAMES_PER_NOTIFY and frame width
+        // (3 x ~57 = 171 < 224), but it stops being unreachable the moment
+        // either one changes, and the failure mode is invisible loss: the
+        // message was already taken off the queue, so not counting it here
+        // loses a frame that no counter ever mentions. Count it and stop
+        // gathering -- the next frame is the same size and will not fit
+        // either. No logging inside the loop: that would turn a loss event
+        // into a timing problem.
+        bleRefused++;
+        break;
       }
+      memcpy(batch + used, msg.text, msg.len);
+      used += msg.len;
+      have++;
     }
     if (used == 0) continue;
 
     // Not connected, or MTU too small -> the batch is dropped on the floor.
     if (!bleConnected || !bleMtuOk) { bleDropped += have; continue; }
 
-    notifyChunked(batch, used);
+    // A refusal after some chunks already went out over-counts, but that path
+    // is the can't-happen one in (2) above; over-counting a can't-happen is the
+    // right way round.
+    if (!notifyChunked(batch, used)) bleRefused += have;
   }
 }
 
@@ -277,6 +374,9 @@ void setup() {
   // ===== BLE ADDED =====
 #if BLE_ENABLED
   bleQueue = xQueueCreate(BLE_QUEUE_LEN, sizeof(LineMsg));
+  // Created before bleInit() so a connect callback firing early has somewhere
+  // to put its diagnostics. bleLog() no-ops on a null handle regardless.
+  logQueue = xQueueCreate(LOG_QUEUE_LEN, sizeof(LineMsg));
   bleInit();
   // Core 0 = the core the BLE stack already lives on. Arduino loop() is core 1.
   xTaskCreatePinnedToCore(bleTask, "bleTx", 4096, nullptr, 1, nullptr, 0);
@@ -318,13 +418,34 @@ void loop() {
 
   if (now - lastStatUs >= 1000000) {
     lastStatUs = now;
+
+    // Core 0 posts its diagnostics to logQueue rather than writing Serial
+    // itself, so only this core ever touches the port and two writes cannot
+    // interleave mid-line. Drained HERE, inside the block that already emits a
+    // diagnostic once a second, rather than per iteration: the 100 Hz path
+    // gains nothing at all, not even a queue poll. Bounded work -- at most
+    // LOG_QUEUE_LEN short lines, and the two log sites fire at most once
+    // per 2 s.
+    if (logQueue) {
+      LineMsg lm;
+      for (int i = 0; i < LOG_QUEUE_LEN &&
+                      xQueueReceive(logQueue, &lm, 0) == pdTRUE; i++) {
+        Serial.write((const uint8_t*)lm.text, lm.len);
+      }
+    }
+
     // '#' prefix so the host validator can skip it instead of counting it
     // as a malformed frame.
-    Serial.printf("# ble conn=%d mtu=%u notif=%lu drop=%lu noconn=%lu\n",
+    // refused = size/MTU invariant failures (never expected, unlike drop).
+    // trunc   = buildFrameLine() hit MAX_LINE_LEN (never expected either).
+    Serial.printf("# ble conn=%d mtu=%u notif=%lu drop=%lu noconn=%lu "
+                  "refused=%lu trunc=%lu\n",
                   bleConnected ? 1 : 0, (unsigned)bleMtu,
                   (unsigned long)bleNotifies,
                   (unsigned long)bleDropped,
-                  (unsigned long)bleSkippedNoConn);
+                  (unsigned long)bleSkippedNoConn,
+                  (unsigned long)bleRefused,
+                  (unsigned long)frameTruncs);
   }
 #endif
   // ===== END BLE ADDED =====
