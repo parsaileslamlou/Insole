@@ -29,6 +29,7 @@
                        // attaches the CCCD automatically. A *deprecation warning*
                        // is fine — ignore it.
 #include <stdarg.h>     // bleLog() is variadic; see the Serial-ownership note.
+#include <atomic>       // bleConnected / bleMtuOk; see the ordering note below.
 // ===== END BLE ADDED =====
 
 /* ---------------------------------------------------------------------
@@ -82,8 +83,50 @@ static QueueHandle_t       bleQueue          = nullptr;
 static QueueHandle_t       logQueue          = nullptr;
 static BLEServer*          pServer           = nullptr;
 static BLECharacteristic*  pTxChar           = nullptr;
-static volatile bool       bleConnected      = false;
-static volatile bool       bleMtuOk          = false;
+/* The two cross-core flags. Relaxed atomics, and the "relaxed" is explicit at
+ * every single use -- see the note below for why the default would be wrong.
+ *
+ * WHY THESE ARE SAFE AS PLAIN volatile TODAY
+ * ------------------------------------------
+ * Internal SRAM on the S3 is uncached, so there is no cache-coherency problem
+ * between the two cores to begin with. A single-word, naturally-aligned load or
+ * store cannot tear on this architecture: a reader sees the old value or the
+ * new one, never half of each. The only genuine cross-core reader is
+ * bleEnqueue() reading bleConnected from core 1 while a BLE callback writes it
+ * from core 0, and the worst case there is one frame decided against a flag
+ * that flipped a microsecond later -- a frame that bleSkippedNoConn or
+ * bleDropped already counts. So the volatile version is not racy in practice.
+ *
+ * WHY IT CHANGES ANYWAY
+ * ---------------------
+ * All of that rests on the BLE stack running on core 0, which is true because
+ * CONFIG_BT_BLUEDROID_PINNED_TO_CORE defaults to 0. That is a default in
+ * somebody else's sdkconfig, invisible from this file, and it can change under
+ * us. std::atomic<bool> with memory_order_relaxed compiles to the same load and
+ * store instructions on this target -- no barriers, no library calls -- so the
+ * guarantee is free and it survives that drift.
+ *
+ * WHAT RELAXED BUYS, AND WHAT IT DOES NOT
+ * ---------------------------------------
+ * It buys: the access cannot tear, and the compiler cannot elide, duplicate, or
+ * invent it. That is the whole list.
+ *
+ * It does NOT order these two flags against each other, or against bleMtu. Two
+ * relaxed accesses may be observed in either order by the other core. So
+ * reading bleMtuOk and then bleMtu as a PAIR is still unsafe -- nothing here
+ * says bleMtu was published before the flag that advertises it. The reason that
+ * does not bite today is Issue A: notifyChunked() latches bleMtu into a local
+ * once, on entry, and range-checks that local against MIN_USABLE_MTU rather
+ * than trusting bleMtuOk to imply anything about it. The latch is what removes
+ * the need for the pairing, not the atomics. If that latch is ever removed,
+ * relaxed is no longer enough and these need acquire/release.
+ *
+ * bleMtu and bleConnectedAtUs stay volatile deliberately: bleMtu is only ever
+ * read through the latch, and bleConnectedAtUs is written and read on core 0
+ * alone.
+ */
+static std::atomic<bool>   bleConnected      {false};
+static std::atomic<bool>   bleMtuOk          {false};
 static volatile uint16_t   bleMtu            = 0;
 static volatile int64_t    bleConnectedAtUs  = 0;
 static volatile uint32_t   bleDropped        = 0;  // queue-full drops
@@ -144,14 +187,14 @@ static int buildFrameLine(char* out, size_t n, uint16_t seq, int64_t ts_us,
 
 class InsoleServerCB : public BLEServerCallbacks {
   void onConnect(BLEServer* s) override {
-    bleConnected     = true;
-    bleMtuOk         = false;
     bleMtu           = 0;
+    bleMtuOk.store(false, std::memory_order_relaxed);
     bleConnectedAtUs = esp_timer_get_time();
+    bleConnected.store(true, std::memory_order_relaxed);
   }
   void onDisconnect(BLEServer* s) override {
-    bleConnected = false;
-    bleMtuOk     = false;
+    bleConnected.store(false, std::memory_order_relaxed);
+    bleMtuOk.store(false, std::memory_order_relaxed);
     bleMtu       = 0;
     // Throw away anything still queued. On reconnect we must not dump a burst
     // of stale frames — that looks like a timing anomaly to the host.
@@ -256,7 +299,7 @@ static bool notifyChunked(const char* buf, size_t len) {
   const size_t usable = (size_t)(mtu - 3);
 
   size_t off = 0;
-  while (off < len && bleConnected) {
+  while (off < len && bleConnected.load(std::memory_order_relaxed)) {
     size_t take = len - off;
     if (take > usable) {
       take = usable;
@@ -288,11 +331,12 @@ static void bleTask(void* arg) {
   for (;;) {
     // --- MTU gate: negotiation completes shortly AFTER onConnect fires, so
     //     poll rather than read it once in the callback.
-    if (bleConnected && !bleMtuOk) {
+    if (bleConnected.load(std::memory_order_relaxed) &&
+        !bleMtuOk.load(std::memory_order_relaxed)) {
       uint16_t m = pServer->getPeerMTU(pServer->getConnId());
       if (m >= MIN_USABLE_MTU) {
         bleMtu   = m;
-        bleMtuOk = true;
+        bleMtuOk.store(true, std::memory_order_relaxed);
         bleLog("# ble mtu=%u ok\n", (unsigned)m);
       } else if (esp_timer_get_time() - bleConnectedAtUs > MTU_WAIT_US) {
         bleLog("# ble mtu=%u BELOW %d - refusing to notify\n",
@@ -325,7 +369,8 @@ static void bleTask(void* arg) {
     if (used == 0) continue;
 
     // Not connected, or MTU too small -> the batch is dropped on the floor.
-    if (!bleConnected || !bleMtuOk) { bleDropped += have; continue; }
+    if (!bleConnected.load(std::memory_order_relaxed) ||
+        !bleMtuOk.load(std::memory_order_relaxed)) { bleDropped += have; continue; }
 
     // A refusal after some chunks already went out over-counts, but that path
     // is the can't-happen one in (2) above; over-counting a can't-happen is the
@@ -338,7 +383,9 @@ static void bleTask(void* arg) {
  * Drop policy on a full queue is DROP OLDEST — the newest frames are the ones
  * worth keeping, and dropping the head keeps latency bounded. */
 static inline void bleEnqueue(const char* line, size_t len) {
-  if (!bleConnected)      { bleSkippedNoConn++; return; }
+  // Relaxed: a plain 32-bit load, no barrier. This line is on the 100 Hz path.
+  if (!bleConnected.load(std::memory_order_relaxed))
+                          { bleSkippedNoConn++; return; }
   if (len >= MAX_LINE_LEN) { bleDropped++;      return; }
 
   LineMsg m;
@@ -440,7 +487,7 @@ void loop() {
     // trunc   = buildFrameLine() hit MAX_LINE_LEN (never expected either).
     Serial.printf("# ble conn=%d mtu=%u notif=%lu drop=%lu noconn=%lu "
                   "refused=%lu trunc=%lu\n",
-                  bleConnected ? 1 : 0, (unsigned)bleMtu,
+                  bleConnected.load(std::memory_order_relaxed) ? 1 : 0, (unsigned)bleMtu,
                   (unsigned long)bleNotifies,
                   (unsigned long)bleDropped,
                   (unsigned long)bleSkippedNoConn,
