@@ -462,10 +462,23 @@ void loop() {
   // ===== BLE ADDED =====
 #if BLE_ENABLED
   bleEnqueue(line, (size_t)len);             // best-effort, non-blocking
+#endif
+  // ===== END BLE ADDED =====
 
+  // 1 Hz status. Deliberately OUTSIDE #if BLE_ENABLED: frameTruncs belongs to
+  // the serial framing path, not to BLE, and a serial-only build used to count
+  // truncations that nothing ever printed -- a silent counter is the same as no
+  // counter. One line per second either way; the BLE fields are what is
+  // conditional, not the line itself.
   if (now - lastStatUs >= 1000000) {
     lastStatUs = now;
 
+    // '#' prefix so the host validator can skip it instead of counting it as a
+    // malformed frame.
+    // trunc = buildFrameLine() hit MAX_LINE_LEN. Never expected: nonzero means
+    //         the frame format outgrew the buffer, a build-time error wearing a
+    //         runtime disguise. Reported on every build.
+#if BLE_ENABLED
     // Core 0 posts its diagnostics to logQueue rather than writing Serial
     // itself, so only this core ever touches the port and two writes cannot
     // interleave mid-line. Drained HERE, inside the block that already emits a
@@ -481,19 +494,18 @@ void loop() {
       }
     }
 
-    // '#' prefix so the host validator can skip it instead of counting it
-    // as a malformed frame.
     // refused = size/MTU invariant failures (never expected, unlike drop).
-    // trunc   = buildFrameLine() hit MAX_LINE_LEN (never expected either).
     Serial.printf("# ble conn=%d mtu=%u notif=%lu drop=%lu noconn=%lu "
                   "refused=%lu trunc=%lu\n",
-                  bleConnected.load(std::memory_order_relaxed) ? 1 : 0, (unsigned)bleMtu,
+                  bleConnected.load(std::memory_order_relaxed) ? 1 : 0,
+                  (unsigned)bleMtu,
                   (unsigned long)bleNotifies,
                   (unsigned long)bleDropped,
                   (unsigned long)bleSkippedNoConn,
                   (unsigned long)bleRefused,
                   (unsigned long)frameTruncs);
-  }
+#else
+    Serial.printf("# ser trunc=%lu\n", (unsigned long)frameTruncs);
 #endif
-  // ===== END BLE ADDED =====
+  }
 }
