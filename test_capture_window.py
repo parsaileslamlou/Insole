@@ -129,31 +129,27 @@ def run_capture(discovery_s, n_frames, source="serial"):
     read_serial.make_source = fake_source(clock, discovery_s, n_frames)
     read_serial.DURATION_S = TEST_DURATION_S
 
-    tmp = tempfile.mkdtemp()
-    out_path = os.path.join(tmp, "out.csv")
-
-    # --source file takes two positionals and a live source takes one. Getting
-    # this wrong does not raise: the lone path lands in in_path, out_path falls
-    # back to the OUT_CSV default, and the run quietly writes readings.csv in
-    # the repo root instead of the temp dir. So build the argv per source.
-    if source == "file":
-        argv = ["--source", source, os.path.join(tmp, "in.txt"), out_path]
-    else:
-        argv = ["--source", source, out_path]
-
     buf = io.StringIO()
     try:
-        with contextlib.redirect_stdout(buf):
-            code = read_serial.main(argv)
-        with open(out_path, newline="") as f:
-            rows = list(csv.reader(f))
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = os.path.join(tmp, "out.csv")
+
+            # --source file takes two positionals; a live source takes one.
+            # Getting this wrong does not raise: the lone path lands in in_path,
+            # out_path falls back to the OUT_CSV default, and the run quietly
+            # writes readings.csv in the repo root instead of the temp dir. So
+            # build the argv per source.
+            if source == "file":
+                argv = ["--source", source, os.path.join(tmp, "in.txt"), out_path]
+            else:
+                argv = ["--source", source, out_path]
+
+            with contextlib.redirect_stdout(buf):
+                code = read_serial.main(argv)
+            with open(out_path, newline="") as f:
+                rows = list(csv.reader(f))
     finally:
         read_serial.time, read_serial.make_source, read_serial.DURATION_S = saved
-        try:
-            os.remove(out_path)
-            os.rmdir(tmp)
-        except OSError:
-            pass
 
     return code, len(rows) - 1, buf.getvalue()      # -1 for the CSV header
 
