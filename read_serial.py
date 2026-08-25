@@ -13,16 +13,23 @@ of strings and does not know or care where they came from.
 
 Usage:
     read_serial.py                          live BLE  -> readings.csv
-    read_serial.py --source serial          live USB  -> readings.csv
+    read_serial.py --source ble    out.csv  live BLE  -> out.csv
+    read_serial.py --source serial out.csv  live USB  -> out.csv
     read_serial.py in.txt out.csv           replay a saved capture
     read_serial.py --source file in.txt out.csv
 
 Both paths are optional. --source defaults to "file" when an input path is
 given and "ble" otherwise, so the notebook's
 `read_serial.py sim_walk.txt sim_walk.csv` works with no flags.
+
+A live source has no input path, so its single positional is the OUTPUT --
+that is what lets compare_captures.py run two captures side by side. --source
+has to be given explicitly in that case, because a bare positional still means
+"replay this file" and always did.
 """
 
 import sys
+import os
 import time
 import csv
 import argparse
@@ -241,23 +248,67 @@ def build_parser():
         description="Capture insole frames from USB serial, BLE, or a saved file.")
     p.add_argument("in_path", nargs="?", default=None,
                    help="capture to replay; giving it implies --source file")
-    p.add_argument("out_path", nargs="?", default=OUT_CSV,
-                   help=f"output CSV (default: {OUT_CSV})")
+    p.add_argument("out_path", nargs="?", default=None,
+                   help=f"output CSV (default: {OUT_CSV}). For a live source "
+                        f"this is the FIRST positional, not the second.")
     p.add_argument("--source", choices=("serial", "file", "ble"), default=None,
                    help="transport; defaults to 'file' when in_path is given, "
                         "else '%s'" % DEFAULT_SOURCE)
     return p
 
 
+def _same_file(a, b):
+    """True if two path strings name the same file, before either is opened.
+
+    normcase() because on Windows 'Capture.TXT' and 'capture.txt' are one
+    file. os.path.samefile() is not usable here: out_path does not exist yet.
+    """
+    return (os.path.normcase(os.path.abspath(a))
+            == os.path.normcase(os.path.abspath(b)))
+
+
 def resolve_args(argv=None):
+    """Bind the two optional positionals to (in_path, out_path) per source.
+
+    argparse fills positionals left to right, so `--source ble out.csv` puts
+    out.csv in in_path -- the wrong slot, because a live source has no input
+    path. The old code spotted the mismatch and REFUSED the argument, which
+    left no way at all to name the output file for a live capture. That is
+    exactly what compare_captures.py needs two of, so the one script whose
+    whole purpose is proving BLE reassembly could not be run. Re-bind rather
+    than refuse.
+
+    The restriction that ban was standing in for is real but much narrower:
+    under --source file both paths are given and must not be the same file,
+    or opening out_path for writing truncates the input before it is read.
+    That is now checked as the collision it actually is, on the resolved
+    paths, so `capture.txt ./capture.txt` is caught too.
+    """
     args = build_parser().parse_args(argv)
+
     if args.source is None:
         args.source = "file" if args.in_path else DEFAULT_SOURCE
-    if args.source == "file" and args.in_path is None:
-        args.in_path = IN_FILE
-    if args.source != "file" and args.in_path is not None:
+
+    if args.source == "file":
+        if args.in_path is None:
+            args.in_path = IN_FILE
+    else:
+        # No input path exists for a live source, so a lone positional is the
+        # output. Two positionals is a real mistake and still an error.
+        if args.out_path is not None:
+            build_parser().error(
+                f"--source {args.source} takes at most one path, the output "
+                f"CSV; got two: {args.in_path!r} and {args.out_path!r}")
+        args.out_path, args.in_path = args.in_path, None
+
+    if args.out_path is None:
+        args.out_path = OUT_CSV
+
+    if args.source == "file" and _same_file(args.in_path, args.out_path):
         build_parser().error(
-            f"in_path is only meaningful with --source file, got --source {args.source}")
+            f"in_path and out_path are the same file ({args.in_path!r}); "
+            f"the replay would truncate its own input")
+
     return args
 
 

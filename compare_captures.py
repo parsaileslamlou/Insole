@@ -1,15 +1,29 @@
 """
 compare_captures.py — prove the BLE capture is byte-equivalent to the serial one.
 
-How to use it (this is the whole point — ONE board, TWO simultaneous readers):
+How to use it (this is the whole point — ONE board, TWO simultaneous readers).
+No copying and no editing: read_serial.py takes the source and the output path
+on the command line.
 
-  1. Copy read_serial.py to read_serial_ble.py.
-     In the copy set:  SOURCE = "ble"     OUT_CSV = "readings_ble.csv"
-     In the original set: SOURCE = "serial"  OUT_CSV = "readings_serial.csv"
-  2. Open two terminals. Start the BLE one first (it has to scan and connect),
-     then the serial one within a second or two.
-  3. Let both run the full DURATION_S.
-  4. python compare_captures.py
+  1. Open two terminals, both in this directory, board plugged in over USB.
+
+  2. Terminal A — start this one FIRST, it has to scan and connect:
+
+         python read_serial.py --source ble readings_ble.csv
+
+     Wait for its "BLE: connected to INSOLE after N.Ns discovery" line.
+
+  3. Terminal B — start within a second or two of that line:
+
+         python read_serial.py --source serial readings_serial.csv
+
+  4. Let both run the full DURATION_S (60 s). Each prints its own summary; the
+     capture_s figures should be within a second or so of each other and of 60.
+
+  5. python compare_captures.py
+
+The file names above are the ones this script reads. Change them here and in
+the two commands together, or not at all.
 
 Because Serial output stays on unconditionally, both files are views of the
 SAME frames. Any sensor value that differs for the same seq is a reassembly
