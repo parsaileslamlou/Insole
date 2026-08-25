@@ -99,12 +99,25 @@ static BLECharacteristic*  pTxChar           = nullptr;
  *
  * WHY IT CHANGES ANYWAY
  * ---------------------
- * All of that rests on the BLE stack running on core 0, which is true because
- * CONFIG_BT_BLUEDROID_PINNED_TO_CORE defaults to 0. That is a default in
- * somebody else's sdkconfig, invisible from this file, and it can change under
- * us. std::atomic<bool> with memory_order_relaxed compiles to the same load and
- * store instructions on this target -- no barriers, no library calls -- so the
- * guarantee is free and it survives that drift.
+ * All of that rests on the BLE stack running on core 0. It does -- but the
+ * sdkconfig symbol that says so has already changed once underneath this file.
+ * The analysis above was written against CONFIG_BT_BLUEDROID_PINNED_TO_CORE=0.
+ * Core 3.3.11 does not ship Bluedroid at all: CONFIG_BT_NIMBLE_ENABLED=y, and
+ * the symbol is CONFIG_BT_NIMBLE_PINNED_TO_CORE=0. Same answer, different name,
+ * and nothing here would have noticed if the answer had changed with it.
+ *
+ * That is the whole argument. The safety of the volatile version was never
+ * stated in this file; it lived in somebody else's defaults. Measured on
+ * esp32:esp32:esp32s3, core 3.3.11:
+ *
+ *   volatile bool                       599041 flash   28344 RAM
+ *   atomic<bool>, memory_order_relaxed  599033 flash   28344 RAM   (-8, 0)
+ *   atomic<bool>, default seq_cst       599061 flash   28344 RAM   (+28, 0)
+ *
+ * Relaxed is free -- fractionally smaller than volatile, byte-identical RAM --
+ * and owes nothing to those defaults. seq_cst is what the barriers cost, on a
+ * path loop() touches at 100 Hz, which is why the ordering is spelled out at
+ * every use rather than left to the default.
  *
  * WHAT RELAXED BUYS, AND WHAT IT DOES NOT
  * ---------------------------------------
