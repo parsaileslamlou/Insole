@@ -1,12 +1,14 @@
-"""capture_calibration.py — record one steady bench load per file.
+"""capture_calibration.py — interactive scale-referenced bench capture.
 
-    python3 capture_calibration.py --source serial            # live, prompts
-    python3 capture_calibration.py --source file sim_walk.txt # rehearsal
-    python3 capture_calibration.py --sensor 3 --grams 500 --source serial
+    python3 capture_calibration.py --source serial          # live bench session
+    python3 capture_calibration.py sim_walk.txt             # rehearse via file
+    python3 capture_calibration.py --source ble --dwell 3   # longer dwell
 
-Session shape: place a known mass on one sensor, record for --seconds, write
-cal_s{N}_{grams}g.csv, repeat. When the sweep is done, run fit_calibration.py
-over the directory.
+One trial per press. Unlike the old known-mass sweep, the applied force is NOT
+known in advance: you press the indentor on a sensor, the load lands on a
+scale, and the scale reading is entered AFTER the press as an interval. Each
+kept trial is written as cal_s{N}_t{K}.csv (raw frames) and summarised as one
+row in calibration_manifest.csv, which is what a scale-aware fit consumes.
 
 Every frame source, and the frame parser itself, comes from read_serial. This
 script does not know the wire format and must never learn it -- a second
@@ -22,43 +24,52 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
+import math
 import os
+import re
+import statistics
 import sys
 import time
 
 import read_serial as RS
-from fit_calibration import SETTLE_S, steady_median
+from calibration import FS_COUNTS
 
 SAMPLE_HZ = 100                 # must match firmware
-DEFAULT_SECONDS = 5.0           # RETUNE: long enough for a stable median
+DEFAULT_DWELL = 2.0             # seconds captured per press; --dwell overrides
 
-FILENAME = "cal_s%d_%sg.csv"
+MANIFEST = "calibration_manifest.csv"
+MANIFEST_COLS = [
+    "sensor", "trial", "csv_path", "g_min", "g_max", "force_n",
+    "sigma_force_n", "n_samples", "count_mean", "count_sd",
+    "saturated_frac", "timestamp_iso",
+]
+
+# cal_s3_t0.csv -> sensor 3, trial 0. Trial index only, no grams: the applied
+# force lives in calibration_manifest.csv now, not in the filename.
+TRIAL_RE = re.compile(r"^cal_s(\d+)_t(\d+)\.csv$")
+
+FILENAME = "cal_s%d_t%d.csv"
 
 
-def format_grams(grams):
-    """500.0 -> '500', 12.5 -> '12.5'. Must satisfy fit_calibration.NAME_RE."""
-    if float(grams) == int(float(grams)):
-        return str(int(float(grams)))
-    return ("%.3f" % float(grams)).rstrip("0").rstrip(".")
+def capture(source, in_path, dwell, quiet=False):
+    """Pull frames from a read_serial source for one dwell window.
 
-
-def capture(source, in_path, seconds, quiet=False):
-    """Pull frames from a read_serial source. -> (rows, counters).
-
-    Stops on whichever comes first: the frame budget for `seconds`, the wall
-    clock, or the source running dry. The frame budget is what makes --source
-    file terminate -- a file yields its whole contents instantly, so a
-    wall-clock limit alone would swallow the entire capture every time.
+    -> (rows, counters). Stops on whichever comes first: the frame budget for
+    `dwell`, the wall clock, or the source running dry. The frame budget is
+    what makes --source file terminate -- a file yields its whole contents
+    instantly, so a wall-clock limit alone would swallow the entire capture
+    every time.
     """
-    budget = max(1, int(seconds * SAMPLE_HZ))
+    budget = max(1, int(dwell * SAMPLE_HZ))
     rows = []
     c = dict(valid=0, malformed=0, bad_checksum=0, status=0, empty=0)
 
     t0 = time.time()
-    for line in RS.make_source(source, in_path, duration_s=seconds):
+    for line in RS.make_source(source, in_path, duration_s=dwell):
         if len(rows) >= budget:
             break
-        if time.time() - t0 > seconds + 5:
+        if time.time() - t0 > dwell + 5:
             break
 
         if not line:
@@ -85,8 +96,131 @@ def capture(source, in_path, seconds, quiet=False):
     return rows, c
 
 
-def write_capture(directory, sensor, grams, rows):
-    path = os.path.join(directory, FILENAME % (sensor, format_grams(grams)))
+def window_stats(rows, sensor):
+    """Count statistics for one sensor's channel over the WHOLE dwell window.
+
+    No steady-state trimming: a hand press has no settling transient to drop
+    the way a placed weight did, and the spread is now data, not something to
+    discard. Assumes `rows` is non-empty (the caller checks).
+    """
+    col = 2 + sensor
+    counts = [r[col] for r in rows]
+    n = len(counts)
+    n_sat = sum(1 for v in counts if v == FS_COUNTS)
+    return {
+        "n": n,
+        "mean": sum(counts) / n,
+        "sd": statistics.stdev(counts) if n >= 2 else 0.0,
+        "min": min(counts),
+        "max": max(counts),
+        "n_sat": n_sat,
+        "sat_frac": n_sat / n,
+    }
+
+
+def print_window(sensor, st):
+    """Report the channel over the window, then the two warnings."""
+    print(f"  s{sensor}: n={st['n']} mean={st['mean']:.1f} sd={st['sd']:.1f} "
+          f"min={st['min']} max={st['max']} sat_frac={st['sat_frac']:.3f}")
+
+    # Saturation is a hard warning: at full scale the divider has bottomed out
+    # and the load is unknowable, so any fit point from this press is dropped.
+    if st["n_sat"]:
+        print(f"  WARNING: full scale (count == {FS_COUNTS}) on {st['n_sat']} "
+              f"of {st['n']} samples -- this press saturates the sensor and any "
+              f"fit point from it will be DROPPED. Press lighter.")
+
+    # Wide spread used to gate a re-take. With hand pressing it is normal, and
+    # the spread is carried into the fit as sigma rather than thrown away, so it
+    # is now informational only.
+    spread = st["max"] - st["min"]
+    if spread > 200:
+        print(f"  note: wide count spread ({spread}). Hand pressing makes this "
+              f"normal; it is carried into the fit as sigma, not a fault.")
+
+
+def ask_enter(prompt):
+    """Blocking prompt that only waits for Enter. -> True, or False on EOF."""
+    try:
+        input(prompt)
+    except EOFError:
+        print()
+        return False
+    return True
+
+
+def prompt_sensor():
+    """-> sensor int 0-5, or None to end the session."""
+    while True:
+        try:
+            s = input("sensor number 0-5 (q=quit): ").strip()
+        except EOFError:
+            print()
+            return None
+        if s.lower() in ("q", "quit", "exit"):
+            return None
+        try:
+            sensor = int(s)
+        except ValueError:
+            print("  not a number")
+            continue
+        if not (0 <= sensor < 6):
+            print("  sensor number must be 0..5")
+            continue
+        return sensor
+
+
+def prompt_grams(label, floor=None):
+    """Read a gram value for `label`. Re-prompts on non-numeric input, and on
+    a value below `floor` when given (that is the max < min guard). None on EOF.
+    """
+    while True:
+        try:
+            s = input(f"scale {label} (grams): ").strip()
+        except EOFError:
+            print()
+            return None
+        try:
+            g = float(s)
+        except ValueError:
+            print("  not a number")
+            continue
+        if floor is not None and g < floor:
+            print(f"  maximum {g:g} is below minimum {floor:g}; re-enter")
+            continue
+        return g
+
+
+def prompt_decision():
+    """-> 'keep' | 'redo' | 'discard'. EOF is treated as discard: nothing is
+    written on an interrupted trial."""
+    while True:
+        try:
+            s = input("  keep / redo / discard [k/r/d]: ").strip().lower()
+        except EOFError:
+            print()
+            return "discard"
+        if s in ("k", "keep"):
+            return "keep"
+        if s in ("r", "redo"):
+            return "redo"
+        if s in ("d", "discard"):
+            return "discard"
+        print("  answer k, r, or d")
+
+
+def next_trial_index(directory, sensor):
+    """One past the highest existing cal_s{sensor}_t{K}.csv in `directory`."""
+    hi = -1
+    for name in os.listdir(directory):
+        m = TRIAL_RE.match(name)
+        if m and int(m.group(1)) == sensor:
+            hi = max(hi, int(m.group(2)))
+    return hi + 1
+
+
+def write_capture(directory, sensor, trial, rows):
+    path = os.path.join(directory, FILENAME % (sensor, trial))
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(RS.CSV_HEADER)
@@ -94,134 +228,119 @@ def write_capture(directory, sensor, grams, rows):
     return path
 
 
-def report(path, rows, c, sensor):
-    """Print what landed, and preview the point the fit will actually take.
+def append_manifest(directory, sensor, trial, csv_path, g_min, g_max,
+                    force_n, sigma_force_n, st):
+    """Append one row to calibration_manifest.csv, writing the header first if
+    the file does not exist yet. Append-only: existing rows are never rewritten,
+    so re-running a session adds trials without disturbing anything already fit.
 
-    Everything below is measured over the STEADY-STATE window only, by calling
-    fit_calibration's own steady_median() on the file just written. Judging the
-    capture over the whole file instead would flag every single one: the
-    placement transient is in there by design, and it is wider than any fault
-    this is meant to catch.
+    g_min and g_max are stored raw so force_n and sigma_force_n stay
+    recomputable from them; the derived columns are a convenience.
     """
-    print(f"  {c['valid']} valid frames, malformed={c['malformed']} "
-          f"bad_checksum={c['bad_checksum']} empty={c['empty']}")
-    if not rows:
-        return
-
-    med, n_used, n_total = steady_median(path, sensor, SETTLE_S)
-    if med is None:
-        print(f"  s{sensor}: no steady-state window")
-        return
-
-    col = 2 + sensor
-    t0 = rows[0][1]
-    steady = [r[col] for r in rows if (r[1] - t0) / 1e6 >= SETTLE_S] or [r[col] for r in rows]
-    lo, hi = min(steady), max(steady)
-    print(f"  s{sensor}: median={med:g} min={lo} max={hi} spread={hi - lo} "
-          f"over {n_used}/{n_total} steady samples")
-
-    if hi >= 4095:
-        print("  WARNING: channel is at full scale. That load saturates this "
-              "sensor; the point will be DROPPED from the fit, not clamped. "
-              "Use a lighter mass.")
-    if hi - lo > 200:
-        print("  WARNING: wide spread after settling -- indenter may have "
-              "shifted mid-capture. Consider re-taking this load.")
+    manifest = os.path.join(directory, MANIFEST)
+    exists = os.path.exists(manifest)
+    with open(manifest, "a", newline="") as f:
+        w = csv.writer(f)
+        if not exists:
+            w.writerow(MANIFEST_COLS)
+        w.writerow([
+            sensor,
+            trial,
+            os.path.basename(csv_path),
+            g_min,
+            g_max,
+            force_n,
+            sigma_force_n,
+            st["n"],
+            round(st["mean"], 4),
+            round(st["sd"], 4),
+            round(st["sat_frac"], 6),
+            datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        ])
+    return manifest
 
 
-def ask(prompt):
-    """Read one line. None on EOF or a quit word."""
-    try:
-        s = input(prompt).strip()
-    except EOFError:
-        print()
-        return None
-    return None if s.lower() in ("q", "quit", "exit") else s
+def run_trial(args, sensor):
+    """One scale-referenced trial for `sensor`.
 
-
-def prompt_one(default_sensor=None):
-    """-> (sensor, grams), or None to end the session."""
+    -> 'kept' | 'discarded' | 'quit'. 'redo' at the decision prompt re-runs
+    from the press with the same sensor, so a fat-fingered scale entry or a bad
+    press costs one more press, not a restart of the session.
+    """
     while True:
-        s = ask("sensor index 0-5 (blank=repeat last, q=quit): ")
-        if s is None:
-            return None
-        if not s and default_sensor is not None:
-            sensor = default_sensor
-        else:
-            try:
-                sensor = int(s)
-            except ValueError:
-                print("  not a number")
-                continue
-            if not (0 <= sensor < 6):
-                print("  sensor index must be 0..5")
-                continue
+        # Step 2: position the indentor and press Enter (blocking).
+        if not ask_enter(f"s{sensor}: position indentor, press Enter to start "
+                          f"({args.dwell:g}s dwell), Ctrl-D to quit: "):
+            return "quit"
 
-        g = ask("mass in grams (q=quit): ")
-        if g is None:
-            return None
-        try:
-            grams = float(g)
-        except ValueError:
-            print("  not a number")
+        # Step 3: capture the fixed dwell window.
+        print(f"recording s{sensor} for {args.dwell:g}s...")
+        rows, _ = capture(args.source, args.in_path, args.dwell, args.quiet)
+        if not rows:
+            print("  no valid frames captured -- check the link. Re-positioning.")
             continue
-        if grams < 0:
-            print("  mass cannot be negative")
+
+        # Step 4: report the channel over the window.
+        st = window_stats(rows, sensor)
+        print_window(sensor, st)
+
+        # Step 5: the scale reading, entered as the interval it actually is.
+        g_min = prompt_grams("minimum")
+        if g_min is None:
+            return "quit"
+        g_max = prompt_grams("maximum", floor=g_min)
+        if g_max is None:
+            return "quit"
+
+        # Step 6: interval -> force. The scale reading is known only to lie
+        # within [g_min, g_max]; modelling that interval as uniform gives mean
+        # (g_min+g_max)/2 and SD (g_max-g_min)/sqrt(12) -- the uniform SD, not
+        # the interval half-width. Equal bounds leave sigma_force_n at exactly
+        # 0.0; it is neither clamped nor floored, only flagged below so a
+        # single-value entry is caught before it is written as certainty.
+        G_PER_N = 9.81 / 1000.0
+        force_n = G_PER_N * (g_min + g_max) / 2.0
+        sigma_force_n = G_PER_N * (g_max - g_min) / math.sqrt(12.0)
+
+        # Step 7: summary, then keep/redo/discard. force_n and sigma_force_n are
+        # shown so a fat-fingered pair is caught before anything is written.
+        print("  --- trial summary ---")
+        print(f"  s{sensor}  scale [{g_min:g}, {g_max:g}] g")
+        print(f"  force_n = {force_n:.4f} N   sigma_force_n = {sigma_force_n:.4f} N")
+        if sigma_force_n == 0.0:
+            print("  zero force uncertainty - check entry")
+
+        decision = prompt_decision()
+        if decision == "redo":
+            print("  redo -- re-press the same sensor")
             continue
-        return sensor, grams
+        if decision == "discard":
+            print("  discarded, nothing written")
+            return "discarded"
 
-
-def confirm_overwrite(path, interactive, force):
-    if not os.path.exists(path) or force:
-        return True
-    if not interactive:
-        print(f"  refusing to overwrite {path} (pass --force)")
-        return False
-    a = ask(f"  {os.path.basename(path)} exists. overwrite? [y/N]: ")
-    return bool(a) and a.lower().startswith("y")
-
-
-def run_one(args, sensor, grams, interactive):
-    path = os.path.join(args.dir, FILENAME % (sensor, format_grams(grams)))
-    if not confirm_overwrite(path, interactive, args.force):
-        return None
-
-    if interactive:
-        a = ask(f"place {format_grams(grams)} g on s{sensor}, ENTER to record "
-                f"{args.seconds:g}s (q=quit): ")
-        if a is None:
-            return None
-
-    print(f"recording s{sensor} @ {format_grams(grams)} g for {args.seconds:g}s...")
-    rows, c = capture(args.source, args.in_path, args.seconds, args.quiet)
-
-    if not rows:
-        print("  no valid frames -- nothing written. Check the link and retry.")
-        return None
-
-    written = write_capture(args.dir, sensor, grams, rows)
-    report(written, rows, c, sensor)
-    print(f"  wrote {written}")
-    return written
+        # Step 8: keep -> write the raw frames and one manifest row.
+        trial = next_trial_index(args.dir, sensor)
+        path = write_capture(args.dir, sensor, trial, rows)
+        append_manifest(args.dir, sensor, trial, path, g_min, g_max,
+                        force_n, sigma_force_n, st)
+        print(f"  wrote {path}")
+        print(f"  appended trial {trial} to {os.path.join(args.dir, MANIFEST)}")
+        return "kept"
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(
-        description="Record steady bench loads into cal_s{N}_{grams}g.csv.")
+        description="Interactive scale-referenced calibration capture. One "
+                    "trial per press; force is read off a scale after the "
+                    "press, not known in advance.")
     p.add_argument("in_path", nargs="?", default=None,
                    help="capture to replay; giving it implies --source file")
     p.add_argument("--source", choices=("serial", "file", "ble"), default=None,
                    help="transport; defaults to 'file' when in_path is given, "
                         f"else '{RS.DEFAULT_SOURCE}'")
-    p.add_argument("--seconds", type=float, default=DEFAULT_SECONDS,
-                   help=f"seconds per load (default: {DEFAULT_SECONDS:g})")
+    p.add_argument("--dwell", type=float, default=DEFAULT_DWELL,
+                   help=f"seconds captured per press (default: {DEFAULT_DWELL:g})")
     p.add_argument("--dir", default=".", help="output directory (default: .)")
-    p.add_argument("--sensor", type=int, default=None,
-                   help="skip the prompt and capture this sensor once")
-    p.add_argument("--grams", type=float, default=None,
-                   help="skip the prompt and capture this mass once")
-    p.add_argument("--force", action="store_true",
-                   help="overwrite an existing capture without asking")
     p.add_argument("--quiet", action="store_true", help="no progress output")
     args = p.parse_args(argv)
 
@@ -238,31 +357,23 @@ def main(argv=None):
         print(f"not a directory: {args.dir}")
         return 1
 
-    one_shot = args.sensor is not None or args.grams is not None
-    if one_shot:
-        if args.sensor is None or args.grams is None:
-            p.error("--sensor and --grams must be given together")
-        if not (0 <= args.sensor < 6):
-            p.error("--sensor must be 0..5")
-        return 0 if run_one(args, args.sensor, args.grams, False) else 1
+    print(f"source={args.source} dwell={args.dwell:g}s dir={args.dir}")
+    print("One trial per press. The scale reading is entered after each press. "
+          "'q' at the sensor prompt ends the session.\n")
 
-    interactive = sys.stdin.isatty()
-    print(f"source={args.source} seconds={args.seconds:g} dir={args.dir}")
-    print("One load per capture. Ctrl-D or 'q' ends the session.\n")
-
-    last_sensor = None
-    n = 0
+    kept = 0
     while True:
-        got = prompt_one(last_sensor)
-        if got is None:
+        sensor = prompt_sensor()
+        if sensor is None:
             break
-        sensor, grams = got
-        if run_one(args, sensor, grams, interactive):
-            n += 1
-            last_sensor = sensor
+        outcome = run_trial(args, sensor)
+        if outcome == "quit":
+            break
+        if outcome == "kept":
+            kept += 1
         print()
 
-    print(f"session over, {n} capture(s) written to {args.dir}")
+    print(f"session over, {kept} trial(s) kept in {args.dir}")
     print(f"next: python3 fit_calibration.py {args.dir}")
     return 0
 
