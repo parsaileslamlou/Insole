@@ -2,6 +2,11 @@
 data/
 *.csv
 
+# ...except cal_data/: the calibration dataset is hours of bench captures with
+# ~40-min rest intervals between trials, not practically reproducible, and it is
+# the tracked input to the committed gain-match derivation. Keep it in git.
+!cal_data/*.csv
+
 # Generated gait streams. make_sessions.py writes sim_<label>_<NN>.txt from a
 # fixed per-class seed, so they rebuild byte-identical and do not belong in git.
 sim_*_[0-9][0-9].txt
