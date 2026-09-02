@@ -31,6 +31,8 @@ percent. A tolerance tight enough to catch a 0.5% bias would only be measuring
 the RNG.
 """
 
+import csv
+import datetime
 import json
 import math
 import os
@@ -42,9 +44,19 @@ import tempfile
 from calibration import (
     FS_COUNTS, G_MPS2, NEAR_SATURATION_MARGIN,
     FLAG_OK, FLAG_FLAT, FLAG_POOR_FIT, FLAG_NO_DATA,
-    apply_calibration, conductance, fit_sensor, grams_to_newtons,
-    is_saturated, is_usable, load_calibration, missing_fit, save_calibration,
+    apply_calibration, apply_gain_match, conductance, fit_sensor,
+    grams_to_newtons, is_saturated, is_usable, load_calibration,
+    load_gain_match, missing_fit, save_calibration,
 )
+from fit_calibration import derive_gain_match, write_gain_match
+
+# The bench acceptance values the relative gain match must reproduce, from the
+# single matched cycle (all six sensors at ~12 N with a >=35 min rest). k to
+# 2 dp, corrections to 4 dp, exactly as specified. See docs/calibration_notes.md.
+GAIN_MANIFEST = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "cal_data", "calibration_manifest.csv")
+K_EXPECT = {0: 59.55, 1: 57.84, 2: 58.59, 3: 75.27, 4: 52.28, 5: 57.37}
+CORR_EXPECT = {0: 0.9900, 1: 0.9616, 2: 0.9741, 3: 1.2513, 4: 0.8692, 5: 0.9538}
 
 # Ground truth for the synthetic sensor. Chosen so the bench sweep lands
 # across 93..2200 counts: a wide, unsaturated, physically plausible span.
@@ -372,6 +384,180 @@ def test_apply_round_trip():
     return passed, failed
 
 
+# ---------------------------------------------------------------------------
+# 5. Relative gain match: derivation, application, persistence
+# ---------------------------------------------------------------------------
+_TZ = datetime.timezone(datetime.timedelta(hours=-4))
+_BASE_TS = datetime.datetime(2026, 9, 1, 20, 0, 0, tzinfo=_TZ)
+
+
+def _iso(minutes):
+    return (_BASE_TS + datetime.timedelta(minutes=minutes)).isoformat(
+        timespec="seconds")
+
+
+def _manifest_row(sensor, trial, force_n, count_mean, ts):
+    """One manifest row in MANIFEST_COLS order. Only the columns the fit reads
+    (sensor, trial, force_n, count_mean, timestamp) carry meaning; the rest are
+    filler in the shape capture_calibration writes."""
+    return [sensor, trial, "cal_s%d_t%d.csv" % (sensor, trial), 0.0, 0.0,
+            force_n, 0.0, 200, count_mean, 0.0, 0.0, ts]
+
+
+def _write_manifest(path, rows):
+    """Write a headerless manifest, exactly as capture_calibration appends it."""
+    with open(path, "w", newline="") as f:
+        csv.writer(f).writerows(rows)
+
+
+def test_gain_match():
+    passed = failed = 0
+
+    doc = derive_gain_match(GAIN_MANIFEST)
+
+    # --- selection: exactly six rows, one per sensor -----------------------
+    sensors = [p["sensor"] for p in doc["points"]]
+    ok = check("matched cycle selects exactly six rows, one per sensor",
+               len(doc["points"]) == 6 and sorted(sensors) == list(range(6)),
+               f"sensors={sensors}")
+    passed, failed = (passed + ok, failed + (not ok))
+
+    # --- k and corrections reproduce the bench acceptance table ------------
+    kbad = [(s, round(doc["k"][str(s)], 2)) for s in range(6)
+            if round(doc["k"][str(s)], 2) != K_EXPECT[s]]
+    ok = check("k reproduces the acceptance table to 2 dp", not kbad,
+               f"mismatches {kbad}" if kbad
+               else "  ".join(f"s{s}={K_EXPECT[s]}" for s in range(6)))
+    passed, failed = (passed + ok, failed + (not ok))
+
+    cbad = [(s, round(doc["corrections"][str(s)], 4)) for s in range(6)
+            if round(doc["corrections"][str(s)], 4) != CORR_EXPECT[s]]
+    ok = check("corrections reproduce the acceptance table to 4 dp", not cbad,
+               f"mismatches {cbad}" if cbad
+               else "  ".join(f"s{s}={CORR_EXPECT[s]}" for s in range(6)))
+    passed, failed = (passed + ok, failed + (not ok))
+
+    # --- corrections average to exactly 1.0 --------------------------------
+    mean_corr = sum(doc["corrections"][str(s)] for s in range(6)) / 6.0
+    ok = check("corrections have mean 1.0", abs(mean_corr - 1.0) < 1e-9,
+               f"mean={mean_corr:.12f}")
+    passed, failed = (passed + ok, failed + (not ok))
+
+    # --- applied in CONDUCTANCE space, NOT on raw counts -------------------
+    # The load-bearing test. apply_gain_match must scale x = c/(fs-c), giving
+    # correction*conductance(c). A version that scaled the raw counts would give
+    # correction*c, ~three orders of magnitude larger, and would fail here.
+    cal = {"fs_counts": FS_COUNTS,
+           "corrections": {i: doc["corrections"][str(i)] for i in range(6)}}
+    c = 1000
+    x = conductance(c, FS_COUNTS)
+    got = apply_gain_match([c] * 6, cal)
+
+    space_ok = all(abs(got[i] - doc["corrections"][str(i)] * x) < 1e-12
+                   for i in range(6))
+    ok = check("correction is applied in conductance space (x = c/(fs - c))",
+               space_ok, f"c={c} x={x:.6f} got[0]={got[0]:.6f}")
+    passed, failed = (passed + ok, failed + (not ok))
+
+    not_raw = all(abs(got[i] - doc["corrections"][str(i)] * c) > 1.0
+                  for i in range(6))
+    ok = check("result is nowhere near raw-count scaling (correction * counts)",
+               not_raw,
+               f"conductance {got[0]:.6f} vs raw {doc['corrections']['0'] * c:.1f}")
+    passed, failed = (passed + ok, failed + (not ok))
+
+    # saturation policy: full-scale, zero, negative -> None, never clamped
+    edge = apply_gain_match([FS_COUNTS, 0, -1, 1000, 1000, 1000], cal)
+    ok = check("full-scale / zero / negative counts return None, never clamped",
+               edge[0] is None and edge[1] is None and edge[2] is None
+               and edge[3] is not None)
+    passed, failed = (passed + ok, failed + (not ok))
+
+    # Unified saturation policy: apply_gain_match uses the SAME near-saturation
+    # margin as apply_calibration, so a count within the margin of full scale is
+    # None here too -- not just at the literal ceiling. This fails if the two
+    # apply paths diverge on saturation again.
+    near = FS_COUNTS - NEAR_SATURATION_MARGIN         # inside the margin
+    gm = apply_gain_match([near] * 6, cal)
+    ac = apply_calibration([near] * 6,
+                           {"fs_counts": FS_COUNTS,
+                            "sensors": {i: fit_sensor(
+                                LOADS_G, [counts_for(g) for g in LOADS_G])
+                                for i in range(6)}})
+    ok = check("near-saturation margin applies to gain match, matching "
+               "apply_calibration",
+               all(v is None for v in gm) and all(v is None for v in ac),
+               f"gm[0]={gm[0]} ac[0]={ac[0]}")
+    passed, failed = (passed + ok, failed + (not ok))
+
+    ok = check("wrong frame width is rejected",
+               _raises(lambda: apply_gain_match([1, 2, 3], cal)))
+    passed, failed = (passed + ok, failed + (not ok))
+
+    # --- round-trip through gain_match.json preserves values ---------------
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "gain_match.json")
+        write_gain_match(path, doc)
+        loaded = load_gain_match(path)
+
+        ok = check("gain-match JSON round-trips fs_counts and the method string",
+                   loaded["fs_counts"] == FS_COUNTS
+                   and "relative gain match" in loaded["method"])
+        passed, failed = (passed + ok, failed + (not ok))
+
+        ok = check("correction keys come back as ints",
+                   set(loaded["corrections"]) == set(range(6)))
+        passed, failed = (passed + ok, failed + (not ok))
+
+        rt = max(abs(loaded["corrections"][s] - doc["corrections"][str(s)])
+                 for s in range(6))
+        ok = check("round-trip preserves the six corrections exactly",
+                   rt == 0.0, f"max drift {rt:.3e}")
+        passed, failed = (passed + ok, failed + (not ok))
+
+        ok = check("apply on the loaded doc matches apply on the derived doc",
+                   apply_gain_match([1200] * 6, loaded)
+                   == apply_gain_match([1200] * 6, cal))
+        passed, failed = (passed + ok, failed + (not ok))
+
+        # A legacy absolute-fit calibration.json is a different document with no
+        # "kind". Pointed at one, load_gain_match must fail loudly rather than
+        # read a/b coefficients as if they were gains.
+        legacy = os.path.join(tmp, "calibration.json")
+        save_calibration(legacy, {i: fit_sensor(
+            LOADS_G, [counts_for(g) for g in LOADS_G]) for i in range(6)})
+        ok = check("load_gain_match refuses a legacy calibration.json (no kind)",
+                   _raises(lambda: load_gain_match(legacy)))
+        passed, failed = (passed + ok, failed + (not ok))
+
+    # --- fails loudly on missing / malformed / unselectable manifests ------
+    ok = check("missing manifest raises", _raises(
+        lambda: derive_gain_match(os.path.join("nope", "missing_manifest.csv"))))
+    passed, failed = (passed + ok, failed + (not ok))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = os.path.join(tmp, "calibration_manifest.csv")
+        _write_manifest(bad, [[0, 0, "cal_s0_t0.csv", "junk"]])   # short + junk
+        ok = check("malformed manifest row raises",
+                   _raises(lambda: derive_gain_match(bad)))
+        passed, failed = (passed + ok, failed + (not ok))
+
+        # A well-formed manifest that no longer selects six rows must fail loudly
+        # rather than gain-match on whatever it happened to find. Here only five
+        # sensors have a qualifying cycle.
+        thin = os.path.join(tmp, "thin_manifest.csv")
+        rows = []
+        for s in range(5):
+            rows.append(_manifest_row(s, 0, 0.0, 100.0, _iso(0)))
+            rows.append(_manifest_row(s, 1, 11.8, 690.0, _iso(40)))
+        _write_manifest(thin, rows)
+        ok = check("a manifest missing a sensor fails the six-row assertion",
+                   _raises(lambda: derive_gain_match(thin)))
+        passed, failed = (passed + ok, failed + (not ok))
+
+    return passed, failed
+
+
 def _apply_one(count):
     """Run one count through apply_calibration on a known-good sensor 0."""
     cal = {"fs_counts": FS_COUNTS,
@@ -390,7 +576,7 @@ def _raises(fn):
 if __name__ == "__main__":
     total_pass = total_fail = 0
     for suite in (test_recovery, test_flat_flagged, test_saturation,
-                  test_apply_round_trip):
+                  test_apply_round_trip, test_gain_match):
         print(f"--- {suite.__name__} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f

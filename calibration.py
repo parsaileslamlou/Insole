@@ -47,6 +47,7 @@ __all__ = [
     "conductance", "grams_to_newtons", "is_saturated",
     "fit_sensor", "missing_fit", "is_usable",
     "save_calibration", "load_calibration", "apply_calibration",
+    "load_gain_match", "apply_gain_match",
     "FLAG_OK", "FLAG_FLAT", "FLAG_FEW_POINTS", "FLAG_DEGENERATE",
     "FLAG_POOR_FIT", "FLAG_NO_DATA",
 ]
@@ -361,6 +362,38 @@ def load_calibration(path):
     return doc
 
 
+GAIN_MATCH_KIND = "relative_gain_match"
+
+
+def load_gain_match(path="gain_match.json"):
+    """Read a relative-gain-match gain_match.json.
+
+    Written by fit_calibration.derive_gain_match. The relative gain match lives
+    in its OWN file, separate from the legacy absolute fit in calibration.json,
+    so the two documents -- different schemas entirely -- can never overwrite or
+    be mistaken for one another. Correction keys come back as ints (JSON stores
+    them as strings) and their values as floats; fs_counts falls back to the
+    module default if absent. apply_gain_match() consumes exactly this dict.
+
+    Raises ValueError when the document's "kind" is absent or not
+    "relative_gain_match": pointed at a legacy absolute fit (or anything else),
+    it fails loudly here rather than reading a/b coefficients as if they were
+    gains and returning silently wrong numbers.
+    """
+    with open(path, "r") as f:
+        doc = json.load(f)
+    kind = doc.get("kind")
+    if kind != GAIN_MATCH_KIND:
+        raise ValueError(
+            f"{path}: not a relative gain match (kind={kind!r}, expected "
+            f"{GAIN_MATCH_KIND!r}); refusing to read gains from it")
+    doc["corrections"] = {int(k): _as_float(v)
+                          for k, v in doc.get("corrections", {}).items()}
+    if _as_float(doc.get("fs_counts")) is None:
+        doc["fs_counts"] = FS_COUNTS
+    return doc
+
+
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
@@ -417,5 +450,61 @@ def apply_calibration(frame, cal, extrapolate=None):
         if CLAMP_NEGATIVE_FORCE and force < 0.0:
             force = 0.0
         out.append(force)
+
+    return out
+
+
+def apply_gain_match(frame, cal):
+    """Six raw counts -> six gain-matched conductances, None where unknowable.
+
+    `cal` is a document from load_gain_match(). The correction is a RELATIVE
+    gain derived in CONDUCTANCE space: it multiplies
+
+        x = counts / (fs_counts - counts)
+
+    -- the same transform conductance() computes -- and NOT the raw counts.
+    Multiplying the counts instead is a different, wrong correction, because the
+    counts are a nonlinear function of conductance. The result per channel is
+
+        correction[i] * x
+
+    a dimensionless conductance with the six channels' gains matched to their
+    common mean. It is not a force: this is a relative gain match, not an
+    absolute calibration.
+
+    A channel is None when it has no correction, saturated, or read non-positive.
+    Saturation uses the SAME rule as apply_calibration -- is_saturated(), i.e. at
+    or within NEAR_SATURATION_MARGIN counts of full scale -> None, never a
+    clamped value. Both apply paths share one saturation policy so a caller's
+    result does not depend on which function it happened to import.
+    """
+    vals = list(frame)
+    if len(vals) != N_SENSORS:
+        raise ValueError(
+            f"frame must hold {N_SENSORS} counts, got {len(vals)}")
+
+    fs = _as_float(cal.get("fs_counts")) or FS_COUNTS
+    corrections = cal.get("corrections", {})
+
+    out = []
+    for i, c in enumerate(vals):
+        g = corrections.get(i)
+        if g is None:
+            g = corrections.get(str(i))
+        g = _as_float(g)
+        if g is None:
+            out.append(None)
+            continue
+
+        if is_saturated(c, fs):             # at or near the ceiling, exactly as
+            out.append(None)                # apply_calibration treats it
+            continue
+
+        x = conductance(c, fs)              # None for counts <= 0, non-finite
+        if x is None:
+            out.append(None)
+            continue
+
+        out.append(g * x)
 
     return out

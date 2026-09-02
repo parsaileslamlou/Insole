@@ -1,9 +1,19 @@
-"""fit_calibration.py — fit all six sensors from a directory of bench captures.
+"""fit_calibration.py — derive the relative gain match, or run the legacy fit.
 
-    python3 fit_calibration.py                     # cwd -> calibration.json
-    python3 fit_calibration.py caldata -o cal.json -p residuals.png
+The DEFAULT action is the single-point RELATIVE gain match across the six
+channels (the calibration we ship), read from the manifest and written to its
+own file, gain_match.json -- never calibration.json:
 
-Input is the set of files capture_calibration.py writes:
+    python3 fit_calibration.py                             # cwd manifest -> gain_match.json
+    python3 fit_calibration.py cal_data/calibration_manifest.csv -o gain_match.json
+
+The legacy multi-point ABSOLUTE fit -- infeasible under FSR drift, see
+docs/calibration_notes.md -- fits all six sensors from a directory of bench
+captures to calibration.json and stays reachable under `legacy-fit`:
+
+    python3 fit_calibration.py legacy-fit caldata -o calibration.json -p residuals.png
+
+Input to the legacy fit is the set of files capture_calibration.py used to write:
 
     cal_s{N}_{grams}g.csv        N in 0..5, grams as typed at the bench
 
@@ -27,9 +37,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
+import json
 import os
 import re
 import sys
+import time
 
 from calibration import (
     FS_COUNTS, conductance, fit_sensor, is_saturated, missing_fit, save_calibration,
@@ -244,6 +257,263 @@ def plot_residuals(fits, sweeps, path, fs):
     return True
 
 
+# ---------------------------------------------------------------------------
+# Relative gain match (the calibration we ship)
+# ---------------------------------------------------------------------------
+# The FSRs relax under sustained load: counts fall ~31% in 76 s at constant
+# applied force and recover with a time constant of ~20 min. That is what makes
+# the multi-point ABSOLUTE fit above infeasible -- there is no bench-stable
+# counts->newtons mapping in the time available. What survives the drift is the
+# RATIO between channels measured at the same force with the same rest interval:
+# the relaxation is common to all six and cancels in the channel-to-channel
+# ratio. So we ship a single-point RELATIVE GAIN MATCH, not an absolute force
+# calibration, and gain_match.json records it as exactly that -- its own file,
+# never calibration.json, so it can never collide with the legacy absolute fit.
+# The limitations are written up in docs/calibration_notes.md.
+
+# calibration_manifest.csv column order, mirrored from
+# capture_calibration.MANIFEST_COLS. Duplicated rather than imported so this fit
+# depends only on calibration + stdlib and never drags in read_serial's
+# transport stack (pyserial / bleak), which capture_calibration pulls in.
+MANIFEST_COLS = [
+    "sensor", "trial", "csv_path", "g_min", "g_max", "force_n",
+    "sigma_force_n", "n_samples", "count_mean", "count_sd",
+    "saturated_frac", "timestamp_iso",
+]
+
+# The matched cycle. A manifest row qualifies only if the sensor had rested at
+# least REST_MIN_MINUTES since its previous trial -- so every channel starts
+# from a comparably recovered state and the shared drift really does cancel --
+# AND the applied force sits in [FORCE_N_LOW, FORCE_N_HIGH], the ~12 N anchor
+# all six were pressed to. These bounds are the selection contract, not tuning
+# knobs: widen them and select_matched_cycle() will catch a bad selection.
+REST_MIN_MINUTES = 35.0
+FORCE_N_LOW = 11.4
+FORCE_N_HIGH = 12.1
+
+GAIN_MATCH_SCHEMA = 1
+GAIN_MATCH_METHOD = (
+    "single-point relative gain match: each channel's gain is matched to the "
+    "six-channel mean at one ~12 N force with a >=35 min rest interval, so "
+    "stress-relaxation drift cancels in the channel-to-channel ratio. This is "
+    "NOT an absolute force calibration and must not be reported as one."
+)
+
+
+def load_manifest(path):
+    """calibration_manifest.csv -> list of row dicts keyed by MANIFEST_COLS.
+
+    Tolerates a file with or without the header row capture_calibration writes:
+    a first cell equal to MANIFEST_COLS[0] is treated as the header and skipped.
+    sensor/trial/force_n/count_mean are parsed to numbers and timestamp_iso to
+    an aware datetime. Fails loudly -- a short row, an unparseable field, a
+    missing or empty file all raise -- rather than silently dropping a point.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"calibration manifest not found: {path}")
+
+    rows = []
+    with open(path, "r", newline="") as f:
+        for lineno, rec in enumerate(csv.reader(f), start=1):
+            if not rec or all(c.strip() == "" for c in rec):
+                continue                                    # blank line
+            if rec[0].strip() == MANIFEST_COLS[0]:
+                continue                                    # header, if present
+            if len(rec) < len(MANIFEST_COLS):
+                raise ValueError(
+                    f"{path}:{lineno}: expected {len(MANIFEST_COLS)} columns "
+                    f"{MANIFEST_COLS}, got {len(rec)}: {rec}")
+            d = dict(zip(MANIFEST_COLS, rec))
+            try:
+                d["sensor"] = int(d["sensor"])
+                d["trial"] = int(d["trial"])
+                d["force_n"] = float(d["force_n"])
+                d["count_mean"] = float(d["count_mean"])
+                d["timestamp"] = datetime.datetime.fromisoformat(
+                    d["timestamp_iso"])
+            except ValueError as e:
+                raise ValueError(f"{path}:{lineno}: unparseable field: {e}") from e
+            rows.append(d)
+
+    if not rows:
+        raise ValueError(f"{path}: no data rows")
+    return rows
+
+
+def with_rest_min(rows):
+    """Annotate each row in place with rest_min = minutes since that sensor's
+    previous trial, chronologically. The first trial per sensor gets None: it
+    has no earlier trial to have rested from. Returns the same list.
+    """
+    by_sensor = {}
+    for r in rows:
+        by_sensor.setdefault(r["sensor"], []).append(r)
+    for sensor_rows in by_sensor.values():
+        sensor_rows.sort(key=lambda r: r["timestamp"])
+        prev = None
+        for r in sensor_rows:
+            r["rest_min"] = (None if prev is None
+                             else (r["timestamp"] - prev).total_seconds() / 60.0)
+            prev = r["timestamp"]
+    return rows
+
+
+def select_matched_cycle(rows):
+    """The rows the gain match is derived from: one per sensor, each rested
+    >= REST_MIN_MINUTES and loaded within [FORCE_N_LOW, FORCE_N_HIGH].
+
+    Asserts exactly N_SENSORS rows, exactly one per sensor 0..N_SENSORS-1, and
+    raises a readable ValueError otherwise. Requires with_rest_min() to have run.
+    """
+    selected = [r for r in rows
+                if r.get("rest_min") is not None
+                and r["rest_min"] >= REST_MIN_MINUTES
+                and FORCE_N_LOW <= r["force_n"] <= FORCE_N_HIGH]
+
+    by_sensor = {}
+    for r in selected:
+        by_sensor.setdefault(r["sensor"], []).append(r)
+
+    problems = []
+    if len(selected) != N_SENSORS:
+        problems.append(f"selected {len(selected)} rows, expected {N_SENSORS}")
+    dupes = {s: [r["trial"] for r in v] for s, v in by_sensor.items() if len(v) > 1}
+    if dupes:
+        problems.append(f"more than one row for sensor(s) {dupes}")
+    missing = [s for s in range(N_SENSORS) if s not in by_sensor]
+    if missing:
+        problems.append(f"no row for sensor(s) {missing}")
+
+    if problems:
+        chosen = ", ".join(
+            f"s{r['sensor']}/t{r['trial']}(force={r['force_n']:.3f},"
+            f"rest={r['rest_min']:.1f}m)"
+            for r in sorted(selected, key=lambda r: (r["sensor"], r["trial"])))
+        raise ValueError(
+            "matched-cycle selection failed: " + "; ".join(problems)
+            + f". criteria: rest_min >= {REST_MIN_MINUTES} min and "
+            f"{FORCE_N_LOW} <= force_n <= {FORCE_N_HIGH}. "
+            f"selected [{chosen}]")
+
+    return [by_sensor[s][0] for s in range(N_SENSORS)]
+
+
+def derive_gain_match(manifest_path="calibration_manifest.csv", fs=FS_COUNTS):
+    """Derive per-channel relative gain corrections from the manifest.
+
+    Returns the full gain_match.json document (a dict) with the corrections and
+    the provenance needed to defend them: the FS_COUNTS used, the six rows the
+    fit consumed as (sensor, trial, force_n, count_mean, rest_min), the selection
+    criteria, and a method string naming this a single-point relative gain match.
+    Writes nothing.
+
+    Per matched-cycle row: x = count_mean / (fs - count_mean) and k = force_n / x.
+    Correction[i] = k_i / mean(k over the six). The corrections therefore have
+    mean 1.0 by construction and carry no absolute force scale -- only the
+    relative gain between channels.
+    """
+    rows = with_rest_min(load_manifest(manifest_path))
+    matched = select_matched_cycle(rows)
+
+    ks, points = {}, []
+    for r in matched:
+        cm = r["count_mean"]
+        x = conductance(cm, fs)                 # same transform apply uses
+        if x is None:
+            raise ValueError(
+                f"s{r['sensor']} t{r['trial']}: count_mean {cm} is unusable at "
+                f"fs={fs} (saturated or non-positive); cannot derive a gain")
+        ks[r["sensor"]] = r["force_n"] / x
+        points.append({
+            "sensor": r["sensor"],
+            "trial": r["trial"],
+            "force_n": r["force_n"],
+            "count_mean": cm,
+            "rest_min": round(r["rest_min"], 4),
+        })
+
+    k_mean = sum(ks.values()) / len(ks)
+    corrections = {s: ks[s] / k_mean for s in ks}
+
+    return {
+        "schema": GAIN_MATCH_SCHEMA,
+        "kind": "relative_gain_match",
+        "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "units": "dimensionless relative gain",
+        "method": GAIN_MATCH_METHOD,
+        "model": "corrected_x = correction[i] * (counts / (fs_counts - counts))",
+        "fs_counts": float(fs),
+        "selection": {
+            "rest_min_minutes": REST_MIN_MINUTES,
+            "force_n_low": FORCE_N_LOW,
+            "force_n_high": FORCE_N_HIGH,
+        },
+        "k": {str(s): ks[s] for s in sorted(ks)},
+        "k_mean": k_mean,
+        "corrections": {str(s): corrections[s] for s in sorted(corrections)},
+        "points": sorted(points, key=lambda p: p["sensor"]),
+    }
+
+
+def write_gain_match(path, doc):
+    """Write the gain-match document to `path` as JSON. Returns the doc."""
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=2, sort_keys=False)
+        f.write("\n")
+    return doc
+
+
+def print_gain_table(doc):
+    corr = doc["corrections"]
+    ks = doc["k"]
+    print()
+    print(f"relative gain match   fs_counts = {doc['fs_counts']:g}")
+    print(f"  {doc['method']}")
+    print()
+    head = (f"{'s':>2}  {'trial':>5}  {'force_n':>8}  {'count_mean':>10}  "
+            f"{'rest_min':>8}  {'k':>8}  {'correction':>10}")
+    print(head)
+    print("-" * len(head))
+    for p in doc["points"]:
+        s = str(p["sensor"])
+        print(f"{p['sensor']:>2}  {p['trial']:>5}  {p['force_n']:>8.4f}  "
+              f"{p['count_mean']:>10.3f}  {p['rest_min']:>8.2f}  "
+              f"{float(ks[s]):>8.2f}  {float(corr[s]):>10.4f}")
+    print()
+    mean_corr = sum(float(v) for v in corr.values()) / len(corr)
+    print(f"  mean k = {doc['k_mean']:.4f}   mean correction = {mean_corr:.6f} "
+          f"(1.0 by construction)")
+
+
+def main_gain_match(argv=None):
+    p = argparse.ArgumentParser(
+        description="Derive the relative gain match from calibration_manifest.csv "
+                    "and write it to gain_match.json (its own file, kept separate "
+                    "from the legacy absolute fit's calibration.json). This is a "
+                    "single-point RELATIVE gain match across the six channels, "
+                    "NOT an absolute force calibration.")
+    p.add_argument("manifest", nargs="?", default="calibration_manifest.csv",
+                   help="path to calibration_manifest.csv "
+                        "(default: ./calibration_manifest.csv)")
+    p.add_argument("-o", "--out", default="gain_match.json",
+                   help="output JSON (default: gain_match.json)")
+    p.add_argument("--fs", type=float, default=FS_COUNTS,
+                   help=f"saturation count (default: {FS_COUNTS}, a PLACEHOLDER; "
+                        f"the corrections are FS-dependent, re-derive if it moves)")
+    args = p.parse_args(argv)
+
+    try:
+        doc = derive_gain_match(args.manifest, args.fs)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"gain match failed: {e}")
+        return 1
+
+    write_gain_match(args.out, doc)
+    print(f"wrote {args.out}")
+    print_gain_table(doc)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         description="Fit all six FSRs from cal_s{N}_{grams}g.csv captures.")
@@ -288,4 +558,11 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # The relative gain match is the calibration we ship, so it is the default.
+    # The legacy multi-point absolute fit -- infeasible under FSR drift, see
+    # docs/calibration_notes.md -- stays reachable as `legacy-fit <dir>` for
+    # anyone re-running an old grams sweep.
+    _argv = sys.argv[1:]
+    if _argv and _argv[0] == "legacy-fit":
+        sys.exit(main(_argv[1:]))
+    sys.exit(main_gain_match(_argv))

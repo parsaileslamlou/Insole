@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "kind": "relative_gain_match",
+  "created_utc": "2026-09-02T03:23:54Z",
+  "units": "dimensionless relative gain",
+  "method": "single-point relative gain match: each channel's gain is matched to the six-channel mean at one ~12 N force with a >=35 min rest interval, so stress-relaxation drift cancels in the channel-to-channel ratio. This is NOT an absolute force calibration and must not be reported as one.",
+  "model": "corrected_x = correction[i] * (counts / (fs_counts - counts))",
+  "fs_counts": 4095.0,
+  "selection": {
+    "rest_min_minutes": 35.0,
+    "force_n_low": 11.4,
+    "force_n_high": 12.1
+  },
+  "k": {
+    "0": 59.54743820640672,
+    "1": 57.83810120596671,
+    "2": 58.592285375981724,
+    "3": 75.2679883083535,
+    "4": 52.28070405116021,
+    "5": 57.37035247899898
+  },
+  "k_mean": 60.14947827114464,
+  "corrections": {
+    "0": 0.9899909345510195,
+    "1": 0.9615727828135334,
+    "2": 0.9741112817613592,
+    "3": 1.2513489804359887,
+    "4": 0.8691796762639702,
+    "5": 0.9537963441741293
+  },
+  "points": [
+    {
+      "sensor": 0,
+      "trial": 6,
+      "force_n": 12.012345000000002,
+      "count_mean": 687.405,
+      "rest_min": 41.8833
+    },
+    {
+      "sensor": 1,
+      "trial": 6,
+      "force_n": 11.943675,
+      "count_mean": 700.89,
+      "rest_min": 40.4167
+    },
+    {
+      "sensor": 2,
+      "trial": 6,
+      "force_n": 11.718045000000002,
+      "count_mean": 682.48,
+      "rest_min": 39.8
+    },
+    {
+      "sensor": 3,
+      "trial": 6,
+      "force_n": 11.713140000000001,
+      "count_mean": 551.445,
+      "rest_min": 39.1167
+    },
+    {
+      "sensor": 4,
+      "trial": 6,
+      "force_n": 11.806335,
+      "count_mean": 754.395,
+      "rest_min": 42.3
+    },
+    {
+      "sensor": 5,
+      "trial": 6,
+      "force_n": 11.502225000000001,
+      "count_mean": 683.895,
+      "rest_min": 41.8167
+    }
+  ]
+}
