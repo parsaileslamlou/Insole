@@ -9,6 +9,11 @@ interface as the hardware, so the whole pipeline runs, and is tested, without
 a board. Real captures from the board exist for four activities and are the
 first non-circular test of everything the simulator was tuned against.
 
+**Start here:** [notebooks/demo.ipynb](notebooks/demo.ipynb) runs the whole
+pipeline without hardware, spec to heatmap, in a few seconds, with the real
+captures beside the simulated ones; its outputs are committed so it reads on
+GitHub.
+
 ## Data path
 
 ```
@@ -49,7 +54,7 @@ first non-circular test of everything the simulator was tuned against.
 | [insole/](insole/) | The package: everything a test or another module imports. `gait_gen` (frame codec + simulator + fault modes), `read_serial` (logger, the transport seam, the validator), `infer_live` (streaming inference), `detector`, `features`, `representations` (what the features see), `splits`, `discriminant`, `calibration`, `fit_calibration`, `heatmap`, `make_sessions`, `paths`. |
 | [scripts/](scripts/) | Programs that are run, never imported: `train_real.py` (the real-data classifier and its analysis), `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`. |
 | [tests/](tests/) | Every test. Each runs directly (PASS/FAIL lines, nonzero exit on failure) and under pytest. |
-| [notebooks/](notebooks/) | [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
+| [notebooks/](notebooks/) | [demo.ipynb](notebooks/demo.ipynb), the run-all demonstration (start here); [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
 | [docs/](docs/) | [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
 | [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (trained on the real captures). |
 | [data/real/](data/real/) | Four real captures, `_02` set (training/evaluation) and `_01` set (failure evidence). Read its README first. |
@@ -117,11 +122,11 @@ pip install -e ".[analysis,test,notebook]"
    python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (293 across the nine files)
    ```
 
-The notebook runs from a fresh clone too: `jupyter nbconvert --to notebook
---execute notebooks/insole.ipynb` from the repository root, or open it in
-Colab (its first cell clones and installs). **Colab caveat:** a tab opened
-before a push keeps the old tree when you "Save a copy in GitHub". Always
-start from a fresh session.
+Both notebooks run from a fresh clone: `jupyter nbconvert --to notebook
+--execute notebooks/demo.ipynb` (or `insole.ipynb`) from the repository root,
+or open one in Colab (the first cell clones and installs). **Colab caveat:** a
+tab opened before a push keeps the old tree when you "Save a copy in GitHub".
+Always start from a fresh session.
 
 ## Status
 
@@ -143,7 +148,7 @@ start from a fresh session.
 | 14 | Streaming inference over serial and BLE | `insole/infer_live.py`, firmware BLE | code and tests done; **live bench UNRUN** (pending hardware, see below) |
 | 15 | Fault injection and robustness | `insole/gait_gen.py` fault modes, `tests/test_faults.py` | done |
 | 16 | Repository consolidation, this README | package layout | done |
-| 17 | Demo notebook | `notebooks/demo.ipynb` | pending |
+| 17 | Demo notebook | [notebooks/demo.ipynb](notebooks/demo.ipynb), `figures/demo/` | done |
 | 18 | Writeup | `docs/writeup.md` | pending |
 | 19 | Final pass, `run_demo.sh`, hardware notes | | pending |
 | 20 | Classifier trained on the real captures | `scripts/train_real.py`, [docs/real_results.md](docs/real_results.md) | done; a per-session split is not possible with one session per class, so the headline is time-blocked within session |
