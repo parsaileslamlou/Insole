@@ -14,11 +14,13 @@ Root-caused to a missing strain relief on the FSR tail, since fixed. _01 is
 kept as failure evidence and is deliberately not analysed, trained on, or
 merged in -- see data/real/README.md.
 
-The detector thresholds are NOT retuned here. T_ON, T_OFF, MIN_DURATION,
-MAX_DURATION and GAP_MERGE were chosen by sweeping against simulated streams
-whose constants were co-evolved with them; running them unchanged against real
-data is the first non-circular test they have had, and a bad result is the
-result.
+The detector thresholds are whatever detector.py holds when this runs; the
+script reads them, never sets them. When it was first run (Prompt 13) all five
+were the simulator-swept values, and its C5 diagnostic showed MAX_DURATION = 120
+discarding 17/35 walk and 28/30 shuffle contacts. MAX_DURATION was then raised
+to 200 on the strength of that diagnostic (see its comment in detector.py and
+sweep_max_duration.py); re-running this script is how the change was verified.
+T_ON, T_OFF, MIN_DURATION and GAP_MERGE are still the simulator-swept values.
 """
 
 import os
@@ -44,10 +46,10 @@ ACTIVITIES = [
     ("shuffle", "shuffle02.csv"),
 ]
 
-# The highest per-sensor count reached by any calibration trial. Above this the
-# gain match is extrapolating past every force it was derived from. From
-# cal_data/calibration_manifest.csv via docs/calibration_notes.md.
-CAL_MAX_COUNTS = 940.0
+# The highest count reached by any calibration sample. Above this the gain
+# match is extrapolating past every force it was derived from. Defined once, in
+# calibration.py, from cal_data/; the 940 that used to be typed here was not.
+CAL_MAX_COUNTS = float(C.CAL_MAX_COUNTS)
 
 # The single force the relative gain match was derived at, for the record.
 GAIN_MATCH_FORCE_N = 12.0
@@ -270,13 +272,14 @@ def c4_s4_zeros(data):
 
 def c5_stances(data):
     """Prompt 9 thresholds, unchanged, against real force."""
-    rule("C5  STANCE DETECTION -- Prompt 9 thresholds, unretuned")
+    rule("C5  STANCE DETECTION -- detector.py thresholds as currently set")
 
     print(f"T_ON={D.T_ON}  T_OFF={D.T_OFF}  MIN_DURATION={D.MIN_DURATION}  "
           f"MAX_DURATION={D.MAX_DURATION}  GAP_MERGE={D.GAP_MERGE}")
-    print("Chosen by sweeping ~2016 combinations against simulated streams whose")
-    print("constants were co-evolved with them. This is their first test against")
-    print("data that did not come from the simulator. NOT retuned here.")
+    print("T_ON, T_OFF, MIN_DURATION and GAP_MERGE were chosen by sweeping ~2016")
+    print("combinations against simulated streams whose constants were co-evolved")
+    print("with them. MAX_DURATION was re-set from this script's own diagnostic")
+    print("below (120 -> 200). Nothing is retuned by this script.")
     print()
 
     out = {}

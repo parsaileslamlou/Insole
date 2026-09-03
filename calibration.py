@@ -43,7 +43,7 @@ import math
 import time
 
 __all__ = [
-    "FS_COUNTS", "G_MPS2",
+    "FS_COUNTS", "G_MPS2", "CAL_MAX_COUNTS",
     "conductance", "grams_to_newtons", "is_saturated",
     "fit_sensor", "missing_fit", "is_usable",
     "save_calibration", "load_calibration", "apply_calibration",
@@ -97,6 +97,17 @@ MIN_FIT_POINTS = 3              # RETUNE
 # The default is one gait_gen.NOISE_STD. Set it to 0 for the literal
 # counts >= fs rule and nothing more.
 NEAR_SATURATION_MARGIN = 25     # RETUNE: set from the real noise floor
+
+# The highest raw ADC count reached by ANY sample in ANY calibration capture
+# (cal_data/cal_s5_t3.csv; the highest per-trial mean in
+# cal_data/calibration_manifest.csv is 809.11). Above this the gain match is
+# extrapolating past every load it was ever derived from. Walking peaks reach
+# ~1600-2000 counts, so in normal use most loaded frames are above it; the
+# number exists so that fraction can be REPORTED, not so anything is clamped
+# or refused. An earlier figure of ~940 circulated in analyze_real.py and
+# docs/sim_vs_real.md; nothing in cal_data/ supports it.
+# test_infer_live.py recomputes this from cal_data/ and fails if it drifts.
+CAL_MAX_COUNTS = 824
 
 # --- Out-of-range policy -----------------------------------------------------
 # True:  extrapolate the line past the calibrated conductance range.
