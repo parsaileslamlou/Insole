@@ -188,9 +188,21 @@ Stages:
    and their feature distributions plotted per feature.
 
 Centre of pressure is the force-weighted mean of the sensor positions in
-`SENSOR_COORDS`, normalised to a unit foot outline. Those coordinates are
-provisional and marked `RETUNE`; every CoP number scales with them, so they are
-placeholders for measured positions, not results.
+`SENSOR_COORDS`. Those are now measured positions, not placeholders:
+`detector.py` holds the raw millimetre table `SENSOR_MM`, taken on a right
+insole lying top-up with y from the heel end and x from the medial edge, and
+derives `SENSOR_COORDS` from it.
+
+The insole measures **274 x 91 mm (10.8 x 3.6 in)**. Both axes are normalised
+by the *length*, so a coordinate times 274 gives millimetres back and the
+insole occupies `x` in `[0, 0.332]`, `y` in `[0, 1]`. Normalising each axis by
+its own extent would stretch the width by 3.01x and corrupt every distance,
+angle and CoP path length; `heatmap.py` rescales `FOOT_OUTLINE` onto the same
+box so the two cannot drift apart.
+
+Two independent measurement passes over the same six sensors disagreed by
+12-22 mm, so the positions carry roughly **+/-15 mm**. Every CoP number scales
+with them and inherits that uncertainty.
 
 ### Pressure heatmap
 
@@ -225,10 +237,13 @@ reads the `sim_*.csv` its bootstrap regenerates and writes features to
 
 ## Open items
 
-- Physical FSR placement to be confirmed against the channel order in
-  framespec.md section 3, and `SENSOR_COORDS` updated to measured positions.
-  Assembly fixed which GPIO carries which channel; it did not measure where on
-  the foot each sensor physically sits, which is what CoP depends on.
+- `SENSOR_COORDS` now comes from measured positions, but the +/-15 mm spread
+  between the two measurement passes is large next to a 91 mm width. A third
+  pass, or a jig that fixes the sensors to known locations, would tighten it.
+- Physical FSR placement still to be confirmed against the channel order in
+  framespec.md section 3. Assembly fixed which GPIO carries which channel; it
+  did not establish that channel `sN` is the sensor measured at `SENSOR_MM[sN]`,
+  and a swapped pair would move the CoP without changing any total force.
 - Stance thresholds `T_ON`, `T_OFF`, `MIN_DURATION`, `MAX_DURATION`, and
   `GAP_MERGE` are tuned against simulated data and marked `RETUNE`. They need
   re-tuning against a real capture and a real noise floor. Every stance count in

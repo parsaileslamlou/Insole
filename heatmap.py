@@ -5,14 +5,31 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # Single source of truth: these used to be repeated here, in the notebook and
 # in detector.py. Editing one copy and not the others silently moved the CoP.
-from detector import SENSOR_COLS, SENSOR_COORDS
+from detector import (
+    SENSOR_COLS, SENSOR_COORDS, INSOLE_LEN_MM, INSOLE_WIDTH_MM,
+)
 
-FOOT_OUTLINE = [
+# The hand-drawn foot silhouette, in the arbitrary units it was digitised in.
+# Only its shape matters; the extents below are measured, not assumed, so
+# editing a vertex here cannot silently desynchronise it from the box.
+_FOOT_OUTLINE_RAW = np.array([
     (0.30, 0.02), (0.20, 0.08), (0.16, 0.20), (0.18, 0.34),
     (0.22, 0.48), (0.20, 0.62), (0.18, 0.76), (0.20, 0.88),
     (0.28, 0.96), (0.42, 0.99), (0.58, 0.99), (0.72, 0.96),
     (0.80, 0.88), (0.82, 0.76), (0.80, 0.62), (0.80, 0.48),
     (0.82, 0.34), (0.80, 0.20), (0.72, 0.08), (0.58, 0.02),
+])
+
+# detector.py normalises both sensor axes by INSOLE_LEN_MM, so the insole
+# occupies x in [0, 91/274] = [0, 0.332] and y in [0, 1]. The silhouette has
+# to be mapped onto that same box or the six sensors draw outside the foot.
+_raw_min = _FOOT_OUTLINE_RAW.min(axis=0)
+_raw_span = np.ptp(_FOOT_OUTLINE_RAW, axis=0)
+_TARGET_SPAN = np.array([INSOLE_WIDTH_MM / INSOLE_LEN_MM, 1.0])
+OUTLINE_SCALE = _TARGET_SPAN / _raw_span
+
+FOOT_OUTLINE = [
+    tuple(v) for v in (_FOOT_OUTLINE_RAW - _raw_min) * OUTLINE_SCALE
 ]
 
 GRID_NX, GRID_NY = 120, 240

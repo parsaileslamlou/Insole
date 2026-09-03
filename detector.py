@@ -13,15 +13,45 @@ Failure taxonomy used in the comments below:
 
 SENSOR_COLS = ["s0", "s1", "s2", "s3", "s4", "s5"]
 
-# RETUNE coordinates to match actual placements
-# [y increases away from the heel, x increases moving right from the heel]
+# --- insole geometry ---------------------------------------------
+# Measured outline of the physical insole: 274 x 91 mm (10.8 x 3.6 in).
+# An earlier 295 x 74 mm figure circulated in these docs and was wrong in
+# both axes -- the insole is shorter and considerably wider than that.
+INSOLE_LEN_MM   = 274.0
+INSOLE_WIDTH_MM = 91.0
+
+# Sensor centres in millimetres on a RIGHT insole lying top-up:
+#   y measured from the heel end, increasing toward the toe
+#   x measured from the MEDIAL edge, so x = 0 is medial, x = 91 is lateral
+#
+# Measurement uncertainty: two independent passes over the same six sensors
+# disagreed by 12-22 mm, so treat every number below as +/-15 mm. That is
+# ~5% of the insole length and ~16% of its width; any CoP figure derived
+# from these coordinates inherits it and should be quoted with it.
+SENSOR_MM = {
+    "s0": (33.0,  50.8),
+    "s1": (50.8,  50.8),
+    "s2": (76.2, 152.4),
+    "s3": (81.3, 185.4),
+    "s4": (25.4, 203.2),
+    "s5": (25.4, 254.0),
+}
+
+# Derived from SENSOR_MM, never hand-typed -- decimals typed twice drift.
+#
+# BOTH axes are divided by INSOLE_LEN_MM, not each by its own extent.
+# Normalising x by the width instead would stretch the short axis by
+# 274/91 = 3.01 and distort every distance, angle and CoP path length
+# computed on these points. Dividing both by the same constant is a
+# similarity transform: shape is preserved, and multiplying any coordinate
+# by 274 recovers millimetres.
+#
+# The price is that x spans only [0, 91/274] = [0, 0.332] rather than the
+# full unit interval. heatmap.py's FOOT_OUTLINE is rescaled to that same
+# box; the two must move together or the sensors render outside the foot.
 SENSOR_COORDS = {
-    "s0": (0.35, 0.10),
-    "s1": (0.65, 0.10),
-    "s2": (0.30, 0.55),
-    "s3": (0.70, 0.55),
-    "s4": (0.35, 0.90),
-    "s5": (0.70, 0.90),
+    name: (x_mm / INSOLE_LEN_MM, y_mm / INSOLE_LEN_MM)
+    for name, (x_mm, y_mm) in SENSOR_MM.items()
 }
 
 # --- detector constants ------------------------------------------
