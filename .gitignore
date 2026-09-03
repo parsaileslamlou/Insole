@@ -1,11 +1,22 @@
 # Recorded sensor data — keep raw CSVs out of git unless you deliberately commit one
-data/
+# data/* rather than data/ so a specific subpath (data/real/) can be re-included
+# below -- a bare directory exclusion cannot be overridden by a file negation.
+data/*
 *.csv
 
 # ...except cal_data/: the calibration dataset is hours of bench captures with
 # ~40-min rest intervals between trials, not practically reproducible, and it is
 # the tracked input to the committed gain-match derivation. Keep it in git.
 !cal_data/*.csv
+
+# ...and except data/real/: the first measured-position gait dataset (stand /
+# walk / fast / shuffle; _01 fault set + _02 good set). The data/ rule above
+# excludes the whole directory, and a file cannot be re-included while its
+# parent directory is excluded -- so re-include the directory first, then its
+# CSVs. check_all.csv is a scratch capture and is deliberately kept ignored.
+!data/real/
+!data/real/*.csv
+data/real/check_all.csv
 
 # Generated gait streams. make_sessions.py writes sim_<label>_<NN>.txt from a
 # fixed per-class seed, so they rebuild byte-identical and do not belong in git.
