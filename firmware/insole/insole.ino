@@ -146,6 +146,8 @@ static volatile uint32_t   bleDropped        = 0;  // queue-full drops
 static volatile uint32_t   bleSkippedNoConn  = 0;  // frames not offered (no link)
 static volatile uint32_t   bleNotifies       = 0;  // notify() calls issued
 static volatile uint32_t   bleRefused        = 0;  // size/MTU invariant failed
+static volatile uint32_t   bleConnects       = 0;  // onConnect() invocations
+static volatile uint32_t   bleDisconnects    = 0;  // onDisconnect() invocations
 // ===== END BLE ADDED =====
 
 /* ---------------------------------------------------------------------
@@ -204,11 +206,13 @@ class InsoleServerCB : public BLEServerCallbacks {
     bleMtuOk.store(false, std::memory_order_relaxed);
     bleConnectedAtUs = esp_timer_get_time();
     bleConnected.store(true, std::memory_order_relaxed);
+    bleConnects++;
   }
   void onDisconnect(BLEServer* s) override {
     bleConnected.store(false, std::memory_order_relaxed);
     bleMtuOk.store(false, std::memory_order_relaxed);
     bleMtu       = 0;
+    bleDisconnects++;
     // Throw away anything still queued. On reconnect we must not dump a burst
     // of stale frames — that looks like a timing anomaly to the host.
     if (bleQueue) xQueueReset(bleQueue);
@@ -350,6 +354,18 @@ static void bleTask(void* arg) {
       if (m >= MIN_USABLE_MTU) {
         bleMtu   = m;
         bleMtuOk.store(true, std::memory_order_relaxed);
+        // Until now the peripheral has run on whatever connection parameters
+        // the central chose at connect -- including its supervision timeout,
+        // the suspected teardown trigger (bleInit sets none). Now that a link
+        // exists, request a survivable one: 15-22.5 ms interval (>= 33
+        // notifies/s with headroom), no slave latency, 6 s supervision. Only a
+        // REQUEST -- the central may accept, reject, or renegotiate. Guarded by
+        // mtuOk above, so it is sent once per connection.
+        pServer->requestConnParams(pServer->getConnId(),
+                                   12,    // min interval 15.0 ms   (1.25 ms units)
+                                   18,    // max interval 22.5 ms
+                                   0,     // slave latency
+                                   600);  // supervision 6000 ms    (10 ms units)
         bleLog("# ble mtu=%u ok\n", (unsigned)m);
       } else if (esp_timer_get_time() - bleConnectedAtUs > MTU_WAIT_US) {
         bleLog("# ble mtu=%u BELOW %d - refusing to notify\n",
@@ -509,14 +525,16 @@ void loop() {
 
     // refused = size/MTU invariant failures (never expected, unlike drop).
     Serial.printf("# ble conn=%d mtu=%u notif=%lu drop=%lu noconn=%lu "
-                  "refused=%lu trunc=%lu\n",
+                  "refused=%lu trunc=%lu conns=%lu disc=%lu\n",
                   bleConnected.load(std::memory_order_relaxed) ? 1 : 0,
                   (unsigned)bleMtu,
                   (unsigned long)bleNotifies,
                   (unsigned long)bleDropped,
                   (unsigned long)bleSkippedNoConn,
                   (unsigned long)bleRefused,
-                  (unsigned long)frameTruncs);
+                  (unsigned long)frameTruncs,
+                  (unsigned long)bleConnects,
+                  (unsigned long)bleDisconnects);
 #else
     Serial.printf("# ser trunc=%lu\n", (unsigned long)frameTruncs);
 #endif
