@@ -217,6 +217,26 @@ for name, r in results.items():
 
 
 # ---------------------------------------------------------------------------
+# Which rows each model gets wrong, and how much they overlap
+# ---------------------------------------------------------------------------
+head("ERROR ROWS (test-set row indices, 0-based within the test split)")
+print("An earlier write-up claimed all three models made 'the same error, fast ->")
+print("walk, 9 rows'. Counts can agree while rows do not, so the rows are listed.\n")
+wrong = {name: set(np.flatnonzero(r["pred"] != yte)) for name, r in results.items()}
+fw = {name: set(np.flatnonzero((yte == "fast") & (r["pred"] == "walk")))
+      for name, r in results.items()}
+for name in results:
+    print(f"  {name:29s} wrong={len(wrong[name]):3d}  fast->walk={len(fw[name]):2d}  "
+          f"rows={sorted(int(i) for i in fw[name])}")
+inter = set.intersection(*fw.values())
+union = set.union(*fw.values())
+print(f"\n  fast->walk rows common to all three : {len(inter)}  {sorted(int(i) for i in inter)}")
+print(f"  fast->walk rows in at least one     : {len(union)}")
+print(f"  all-errors common to all three      : {len(set.intersection(*wrong.values()))}")
+print(f"  all-errors in at least one          : {len(set.union(*wrong.values()))}")
+
+
+# ---------------------------------------------------------------------------
 # sklearn cross-check on the same subset
 # ---------------------------------------------------------------------------
 head("SKLEARN CROSS-CHECK (mean-centered log-discriminants)")
@@ -362,7 +382,9 @@ else:
 # Intervals
 # ---------------------------------------------------------------------------
 head("INTERVALS")
-print("accuracy_ci is an unclipped Wald interval, used exactly as written.\n")
+print("accuracy_ci is a Wilson score interval (it was an unclipped Wald")
+print("interval before). se is still the Wald standard error, kept for the")
+print("stride-vs-session comparison below; it is no longer half the CI width.\n")
 print(f"{'model':29s} {'acc':>8s} {'n':>6s} {'se':>10s}   95% CI")
 loud = []
 for name, r in results.items():
