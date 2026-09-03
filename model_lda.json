@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "created_utc": "2026-09-03T07:35:22Z",
+  "kind": "lda",
+  "classes": [
+    "fast",
+    "shuffle",
+    "walk"
+  ],
+  "means": [
+    [
+      0.8862290606357025,
+      0.7043399606390676
+    ],
+    [
+      0.8232492849185574,
+      0.6392465144765769
+    ],
+    [
+      0.9767350738997727,
+      0.7018654023587841
+    ]
+  ],
+  "priors": [
+    0.3570792520035619,
+    0.42831700801424755,
+    0.21460373998219057
+  ],
+  "counts": [
+    401,
+    481,
+    241
+  ],
+  "cov": [
+    [
+      0.0016143145161798243,
+      0.00045011339418087385
+    ],
+    [
+      0.00045011339418087385,
+      0.0006838555338757984
+    ]
+  ],
+  "meta": {
+    "purpose": "deployment classifier loaded by infer_live.py",
+    "features": [
+      "cop_path_len",
+      "cop_displacement"
+    ],
+    "training_data": "SIMULATED: 12 gait_gen sessions via make_sessions.py, stances by detector.find_stances + merge_close, features by features.extract_features. Not evidence about hardware.",
+    "frame": "features_sessions.csv",
+    "frame_sha256": "0c61f578cfc283001600584cced763e22261c27e20a39d4b675cf4ee5c88292e",
+    "n_rows": 1123,
+    "sessions": [
+      "sim_fast_00",
+      "sim_fast_01",
+      "sim_fast_02",
+      "sim_fast_03",
+      "sim_shuffle_00",
+      "sim_shuffle_01",
+      "sim_shuffle_02",
+      "sim_shuffle_03",
+      "sim_walk_00",
+      "sim_walk_01",
+      "sim_walk_02",
+      "sim_walk_03"
+    ],
+    "class_counts": {
+      "fast": 401,
+      "shuffle": 481,
+      "walk": 241
+    },
+    "heldout_check": {
+      "split": "session-disjoint, test = session _03 of each class",
+      "test_sessions": [
+        "sim_fast_03",
+        "sim_shuffle_03",
+        "sim_walk_03"
+      ],
+      "n_train": 853,
+      "n_test": 270,
+      "accuracy": 0.9296296296296296,
+      "n_correct": 251,
+      "wilson95_lo": 0.8927148404768516,
+      "wilson95_hi": 0.9544902591135686,
+      "wald_se": 0.01556567702591867
+    },
+    "geometry": {
+      "insole_len_mm": 274.0,
+      "insole_width_mm": 91.0,
+      "sensor_mm": {
+        "s0": [
+          33.0,
+          50.8
+        ],
+        "s1": [
+          50.8,
+          50.8
+        ],
+        "s2": [
+          76.2,
+          152.4
+        ],
+        "s3": [
+          81.3,
+          185.4
+        ],
+        "s4": [
+          25.4,
+          203.2
+        ],
+        "s5": [
+          25.4,
+          254.0
+        ]
+      }
+    },
+    "detector": {
+      "T_ON": 1200,
+      "T_OFF": 450,
+      "MIN_DURATION": 15,
+      "MAX_DURATION": 200,
+      "GAP_MERGE": 12
+    },
+    "fit_script": "fit_model.py"
+  }
+}

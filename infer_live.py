@@ -1,0 +1,492 @@
+"""infer_live.py -- streaming stance detection and classification.
+
+One frame at a time, from whichever line source read_serial.make_source()
+hands back, through the same validation, detector and feature code the batch
+pipeline uses, to a persisted classifier. Switching between a saved file, USB
+serial and BLE is a command-line argument, not a code change.
+
+    python infer_live.py sim_walk.txt                          replay a frame log
+    python infer_live.py data/real/walk02.csv --label walk     replay a CSV capture
+    python infer_live.py --source serial --port COM13 --duration 60
+    python infer_live.py --source ble --duration 60
+    python infer_live.py --source serial --out preds.csv       also write per-stance rows
+
+What it prints, and why each line is there
+------------------------------------------
+Per completed stance: frame span, length, features, predicted class, and the
+running counters. Every STATUS_EVERY_S seconds regardless: the counters alone,
+so a long silence is visibly "frames arriving, nothing completing" rather
+than "nothing arriving". The counters that matter most:
+
+    stances completed / discarded>MAX
+        A stance longer than detector.MAX_DURATION is DISCARDED by the
+        detector, not clipped (armed-latch design, see find_stances). At the
+        old 120-frame ceiling that was 17/35 walk and 28/30 shuffle contacts.
+        Without this counter beside the completed count, sparse predictions
+        look like a classifier failure when they are a segmentation one.
+    extrap
+        Fraction of valid frames with at least one sensor above
+        calibration.CAL_MAX_COUNTS, the highest count any calibration sample
+        reached. The gain match is extrapolating on those frames. They are
+        counted, never clamped or refused.
+    s4=0
+        Fraction of valid frames where s4 reads exactly 0. That is BELOW
+        ACTIVATION THRESHOLD, not missing data (measured: s4 = 0 counts at
+        2.58 N while s5 read 239 at 2.49 N). CoP on those frames is a
+        5-sensor centroid with a 33.6-36.7 mm lateral bias. Passed through,
+        counted, never imputed or dropped.
+    allzero
+        Frames where all six sensors read 0. features.cop_frame returns
+        (nan, nan) for those by documented behaviour; cop_features skips
+        them. Nothing here adds handling to detector.py or features.py.
+
+What the model sees
+-------------------
+Features are computed on RAW COUNTS, exactly as the batch path
+(features.extract_features on a read_serial CSV) computes them and exactly as
+the training frame was built. The gain match IS applied every frame -- in
+conductance space, via calibration.apply_gain_match -- and its output is
+carried in the per-stance record (--out) and drives the extrap counter, but
+it does not feed the detector or the features. Feeding gain-matched
+conductance into CoP would put the model on a distribution it was never
+trained on; changing that means retraining, which is a later decision.
+
+The persisted model is fitted on SIMULATED sessions (fit_model.py). On the
+real _02 captures the same recipe scored far below the majority floor
+(sim_vs_real.py D2). Predictions on real gait are a plumbing check until a
+real training set exists, and the banner says so on every run.
+
+Equivalence
+-----------
+test_infer_live.py asserts that this script's per-stance features on a file
+are IDENTICAL to extract_features(df, merge_close(find_stances(total))) on
+the CSV read_serial.py writes from the same file. The one documented
+deviation: the batch path takes dt as the median ts_us step over the WHOLE
+file; this script takes the median over the frames seen so far, which is
+all a stream can know. On every capture in the repo both are exactly
+10000 us, so the features agree bit for bit.
+"""
+
+import argparse
+import csv
+import math
+import os
+import sys
+import time
+from collections import Counter, deque
+from itertools import islice
+from time import perf_counter
+
+import numpy as np
+import pandas as pd
+
+import calibration as C
+import detector as D
+import read_serial as RS
+from discriminant import load_model, predict
+from features import cop_features, cop_trajectory, stance_features
+
+REPO = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_MODEL = os.path.join(REPO, "model_lda.json")
+DEFAULT_GAIN = os.path.join(REPO, "gain_match.json")
+
+STATUS_EVERY_S = 5.0
+STAGES = ("read", "validate", "calibrate", "detect", "feature", "predict")
+FEATURE_COLS = ["peak_counts", "time_to_peak_s", "contact_time_s",
+                "loading_rate_cps", "impulse_counts_s",
+                "cop_path_len", "cop_displacement"]
+S4 = D.SENSOR_COLS.index("s4")
+
+
+# ---------------------------------------------------------------------------
+# Line sources beyond read_serial's three: a CSV capture replayed as frames
+# ---------------------------------------------------------------------------
+def frame_line(seq, ts_us, vals):
+    """Encode one frame exactly as the firmware does (framespec.md section 4)."""
+    nums = [int(seq), int(ts_us)] + [int(v) for v in vals]
+    return "INS," + ",".join(str(n) for n in nums) + f",{sum(nums) % 256}"
+
+
+def csv_lines(path):
+    """Replay a read_serial CSV (seq,ts_us,s0..s5) as frame lines.
+
+    The real captures in data/real/ exist only as CSV, so this is how they
+    reach the same parse_frame path a live board does. Re-encoding through the
+    checksum means a corrupt CSV row fails validation instead of being trusted.
+    """
+    with open(path, "r", newline="") as f:
+        r = csv.reader(f)
+        header = next(r)
+        want = RS.CSV_HEADER
+        if [h.strip() for h in header] != want:
+            raise ValueError(f"{path}: header {header} is not {want}")
+        for row in r:
+            if not row:
+                continue
+            yield frame_line(row[0], row[1], row[2:8])
+
+
+def make_lines(source, in_path, duration_s, port):
+    if source == "file" and in_path and in_path.lower().endswith(".csv"):
+        return csv_lines(in_path)
+    return RS.make_source(source, in_path, duration_s=duration_s, port=port)
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+class Timers:
+    """perf_counter accumulators, one per stage."""
+
+    def __init__(self):
+        self.n = Counter()
+        self.total = Counter()
+        self.worst = Counter()
+
+    def tick(self, stage, t0):
+        dt = perf_counter() - t0
+        self.n[stage] += 1
+        self.total[stage] += dt
+        if dt > self.worst[stage]:
+            self.worst[stage] = dt
+
+    def report(self):
+        print(f"{'stage':10s} {'calls':>8s} {'total_ms':>10s} {'mean_us':>9s} {'max_us':>9s}")
+        for st in STAGES:
+            n = self.n[st]
+            if n == 0:
+                print(f"{st:10s} {0:8d} {'--':>10s} {'--':>9s} {'--':>9s}")
+                continue
+            print(f"{st:10s} {n:8d} {1e3 * self.total[st]:10.1f} "
+                  f"{1e6 * self.total[st] / n:9.1f} {1e6 * self.worst[st]:9.1f}")
+
+
+class RunningMedianDt:
+    """Median ts_us step over the frames seen so far, pandas-median semantics.
+
+    Steps are integers, so a Counter of them gives an exact median without
+    keeping the list. Even count -> mean of the two middle values, as
+    pandas.Series.median does in features.frame_dt.
+    """
+
+    def __init__(self):
+        self.steps = Counter()
+        self.n = 0
+        self.prev = None
+
+    def push(self, ts_us):
+        if self.prev is not None:
+            self.steps[ts_us - self.prev] += 1
+            self.n += 1
+        self.prev = ts_us
+
+    def dt_s(self):
+        if self.n == 0:
+            return float("nan")
+        keys = sorted(self.steps)
+        lo_rank, hi_rank = (self.n - 1) // 2, self.n // 2
+        seen, lo_val, hi_val = 0, None, None
+        for k in keys:
+            seen += self.steps[k]
+            if lo_val is None and seen > lo_rank:
+                lo_val = k
+            if hi_val is None and seen > hi_rank:
+                hi_val = k
+                break
+        return (lo_val + hi_val) / 2.0 / 1_000_000.0
+
+
+def features_for(rows, dt):
+    """The batch feature functions applied to one stance's frames.
+
+    `rows` is the (ts_us, vals) list for frames start..end INCLUSIVE. The
+    notebook-lifted extractors slice [start:end], which drops the last frame;
+    passing (0, n-1) here reproduces that exactly.
+    """
+    n = len(rows)
+    df = pd.DataFrame([r[1] for r in rows], columns=D.SENSOR_COLS)
+    total = df[D.SENSOR_COLS].sum(axis=1)
+    out = stance_features(total, dt, 0, n - 1)
+    out.update(cop_features(cop_trajectory(df, 0, n - 1)))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def build_parser():
+    p = argparse.ArgumentParser(
+        description="Stream frames through detector -> features -> classifier.")
+    p.add_argument("in_path", nargs="?", default=None,
+                   help="frame log (.txt) or read_serial CSV to replay; implies --source file")
+    p.add_argument("--source", choices=("serial", "file", "ble"), default=None,
+                   help="transport; defaults to 'file' when in_path is given, else 'serial'")
+    p.add_argument("--port", default=None,
+                   help=f"serial port for --source serial (default: read_serial.PORT = {RS.PORT})")
+    p.add_argument("--duration", type=float, default=None, metavar="SECONDS",
+                   help=f"live capture length (default: read_serial.DURATION_S = {RS.DURATION_S})")
+    p.add_argument("--model", default=DEFAULT_MODEL,
+                   help="persisted classifier from fit_model.py (default: model_lda.json)")
+    p.add_argument("--gain", default=DEFAULT_GAIN,
+                   help="relative gain match JSON (default: gain_match.json); 'none' to skip")
+    p.add_argument("--out", default=None,
+                   help="write one CSV row per completed stance here")
+    p.add_argument("--label", default=None,
+                   help="true activity of a replayed file, for the agreement line at exit")
+    p.add_argument("--status-every", type=float, default=STATUS_EVERY_S, metavar="SECONDS",
+                   help=f"print the counters this often even with no stance (default {STATUS_EVERY_S})")
+    p.add_argument("--quiet", action="store_true",
+                   help="suppress per-stance and status lines; summary only")
+    return p
+
+
+def resolve_args(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.source is None:
+        args.source = "file" if args.in_path else "serial"
+    if args.source == "file" and args.in_path is None:
+        build_parser().error("--source file needs a path to replay")
+    if args.source != "file" and args.in_path is not None:
+        build_parser().error(f"--source {args.source} takes no input path")
+    return args
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def counters_line(v, tr, k):
+    c = v.c
+    n = max(c["valid"], 1)
+    return (f"valid={c['valid']} bad={c['malformed'] + c['bad_checksum'] + c['empty']} "
+            f"seq_breaks={c['seq_breaks']} lost={c['lost']} | "
+            f"stances={tr.n_stances} discarded>MAX={tr.n_discarded_max} "
+            f"rejected<MIN={tr.n_rejected_min} | "
+            f"extrap={100.0 * k['extrap'] / n:.1f}% s4=0:{100.0 * k['s4zero'] / n:.1f}% "
+            f"allzero={k['allzero']}")
+
+
+def main(argv=None):
+    args = resolve_args(argv)
+    duration_s = RS._resolve(args.duration, RS.DURATION_S)
+
+    model = load_model(args.model)
+    meta = model.get("meta", {})
+    feat_names = meta.get("features", ["cop_path_len", "cop_displacement"])
+
+    gm = None
+    if args.gain.lower() != "none":
+        gm = C.load_gain_match(args.gain)
+
+    # -- banner -------------------------------------------------------------
+    print(f"infer_live: source={args.source}"
+          + (f" in={args.in_path}" if args.in_path else "")
+          + (f" port={RS._resolve(args.port, RS.PORT)}" if args.source == "serial" else "")
+          + (f" duration={duration_s:g}s stall={RS.STALL_S:g}s" if args.source != "file" else ""))
+    print(f"model     : {os.path.relpath(args.model, REPO) if args.model.startswith(REPO) else args.model}"
+          f"  kind={model['kind']}  classes={[str(c) for c in model['classes']]}  features={feat_names}")
+    hc = meta.get("heldout_check", {})
+    if hc:
+        print(f"            trained on {meta.get('n_rows')} rows / "
+              f"{len(meta.get('sessions', []))} sessions; held-out check "
+              f"{hc.get('accuracy', float('nan')):.4f} "
+              f"[{hc.get('wilson95_lo', float('nan')):.4f}, {hc.get('wilson95_hi', float('nan')):.4f}] "
+              f"on {hc.get('n_test')} SIMULATED stances")
+    print("WARNING   : the model is fitted on simulated gait. On real captures this")
+    print("            recipe scored below the majority floor (sim_vs_real.py D2).")
+    print("            Predictions on real gait are a plumbing check, not a result.")
+    print(f"detector  : T_ON={D.T_ON} T_OFF={D.T_OFF} MIN_DURATION={D.MIN_DURATION} "
+          f"MAX_DURATION={D.MAX_DURATION} GAP_MERGE={D.GAP_MERGE}  "
+          f"(a run > MAX_DURATION is DISCARDED, not clipped)")
+    if gm is not None:
+        print("gain match: " + "  ".join(f"s{i}={gm['corrections'][i]:.4f}" for i in range(6))
+              + f"  applied to x = counts/({gm['fs_counts']:g} - counts); "
+              f"extrapolating above {C.CAL_MAX_COUNTS} counts")
+    else:
+        print("gain match: skipped (--gain none)")
+    print()
+
+    # -- state --------------------------------------------------------------
+    v = RS.FrameValidator()
+    tr = D.StanceTracker()
+    timers = Timers()
+    dts = RunningMedianDt()
+    buf = deque()                      # (idx, ts_us, vals) for frames still live
+    k = Counter()                      # extrap, s4zero, allzero, predicted, no_pred
+    preds = []                         # per-stance records
+    idx = -1
+    first_ts = None
+    t_first = t_last = None
+    last_status = time.time()
+    stalled = None
+    interrupted = False
+    RS.SOURCE_DROPS["n"] = 0
+
+    def handle(events, now_s):
+        for kind, s, e in events:
+            if kind == "discarded_max":
+                if not args.quiet:
+                    print(f"discard  frames {s:6d}..{e:6d} ran {e - s + 1} frames >= "
+                          f"MAX_DURATION={D.MAX_DURATION}: DISCARDED, not clipped  | "
+                          + counters_line(v, tr, k))
+                continue
+            if kind != "stance":
+                continue
+            # feature ------------------------------------------------------
+            t0 = perf_counter()
+            first_idx = buf[0][0]
+            rows = [(r[1], r[2]) for r in islice(buf, s - first_idx, e - first_idx + 1)]
+            assert len(rows) == e - s + 1, (len(rows), s, e, first_idx)
+            ft = features_for(rows, dts.dt_s())
+            timers.tick("feature", t0)
+            # predict ------------------------------------------------------
+            t0 = perf_counter()
+            x = np.array([[float(ft[f]) for f in feat_names]])
+            if np.isfinite(x).all():
+                label = str(predict(model, x)[0])
+                k["predicted"] += 1
+            else:
+                label = "no-prediction(nan)"
+                k["no_pred"] += 1
+            timers.tick("predict", t0)
+            t_start = (rows[0][0] - first_ts) / 1e6
+            rec = {"stance": tr.n_stances, "start": s, "end": e,
+                   "n_frames": e - s + 1, "t_start_s": t_start, "pred": label}
+            rec.update({c: ft[c] for c in FEATURE_COLS})
+            preds.append(rec)
+            if not args.quiet:
+                print(f"stance {tr.n_stances:4d}  frames {s:6d}..{e:6d} "
+                      f"({e - s + 1:3d} fr, {ft['contact_time_s']:.2f} s) t={t_start:7.2f}s  "
+                      f"path={ft['cop_path_len']:.4f} disp={ft['cop_displacement']:.4f}"
+                      f"  -> {label:8s} | " + counters_line(v, tr, k))
+
+    lines = make_lines(args.source, args.in_path, duration_s, args.port)
+    it = iter(lines)
+    try:
+        while True:
+            # read --------------------------------------------------------
+            t0 = perf_counter()
+            try:
+                line = next(it)
+            except StopIteration:
+                break
+            except RS.StallError as exc:
+                stalled = str(exc)
+                break
+            timers.tick("read", t0)
+
+            now = time.time()
+            if t_first is None:
+                t_first = now
+            elif args.source != "file" and now - t_first > duration_s + 5:
+                break                       # runaway guard, as read_serial.main
+
+            if line.startswith("#"):
+                print(line)
+
+            # validate ----------------------------------------------------
+            t0 = perf_counter()
+            row = v.feed(line)
+            timers.tick("validate", t0)
+            if row is None:
+                continue
+            seq, ts_us, vals = row
+            idx += 1
+            t_last = now
+            if first_ts is None:
+                first_ts = ts_us
+
+            # calibrate ---------------------------------------------------
+            t0 = perf_counter()
+            if gm is not None:
+                g = C.apply_gain_match(vals, gm)
+            else:
+                g = None
+            if any(c > C.CAL_MAX_COUNTS for c in vals):
+                k["extrap"] += 1
+            if vals[S4] == 0:
+                k["s4zero"] += 1
+            if not any(vals):
+                k["allzero"] += 1
+            dts.push(ts_us)
+            timers.tick("calibrate", t0)
+
+            # detect ------------------------------------------------------
+            t0 = perf_counter()
+            buf.append((idx, ts_us, vals, g))
+            events = tr.push(sum(vals))
+            timers.tick("detect", t0)
+
+            handle(events, now)
+
+            keep = tr.earliest_live_index()
+            if keep is None:
+                buf.clear()
+            else:
+                while buf and buf[0][0] < keep:
+                    buf.popleft()
+
+            if not args.quiet and now - last_status >= args.status_every:
+                last_status = now
+                print(f"status  t={now - t_first:6.1f}s  " + counters_line(v, tr, k))
+    except KeyboardInterrupt:
+        interrupted = True
+
+    handle(tr.flush(), time.time())
+
+    # -- summary ------------------------------------------------------------
+    c = v.c
+    loss_pct = v.loss_pct()
+    capture_s = (t_last - t_first) if (t_first is not None and t_last is not None) else 0.0
+    device_s = ((v.last_ts - v.first_ts) / 1e6
+                if (v.first_ts is not None and v.last_ts is not None) else 0.0)
+    print()
+    print(f"source={args.source} valid={c['valid']} malformed={c['malformed']} "
+          f"empty={c['empty']} bad_checksum={c['bad_checksum']} "
+          f"seq_breaks={c['seq_breaks']} lost={c['lost']} loss={loss_pct:.2f}% "
+          f"timing_breaks={c['timing_breaks']} status={c['status']} "
+          f"source_drops={RS.SOURCE_DROPS['n']} capture_s={capture_s:.1f} device_s={device_s:.1f}")
+    n = max(c["valid"], 1)
+    print(f"stances completed={tr.n_stances} discarded>MAX_DURATION({D.MAX_DURATION})="
+          f"{tr.n_discarded_max} rejected<MIN_DURATION({D.MIN_DURATION})={tr.n_rejected_min} "
+          f"predicted={k['predicted']} no_prediction={k['no_pred']}")
+    print(f"frames extrapolating (any sensor > {C.CAL_MAX_COUNTS} counts)={k['extrap']} "
+          f"({100.0 * k['extrap'] / n:.1f}%)  s4=0 frames={k['s4zero']} "
+          f"({100.0 * k['s4zero'] / n:.1f}%)  all-zero frames={k['allzero']}")
+    if preds:
+        counts = Counter(r["pred"] for r in preds)
+        print("predictions: " + "  ".join(f"{lab}={counts[lab]}" for lab in sorted(counts)))
+        if args.label:
+            agree = sum(1 for r in preds if r["pred"] == args.label)
+            print(f"agreement with --label {args.label!r}: {agree}/{len(preds)} "
+                  f"= {agree / len(preds):.4f}  (plumbing check on a sim-trained model, "
+                  f"not an accuracy)")
+    print()
+    print("per-stage timing (perf_counter; 'read' is time waiting on the source):")
+    timers.report()
+
+    if args.out:
+        with open(args.out, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["stance", "start", "end", "n_frames",
+                                              "t_start_s"] + FEATURE_COLS + ["pred"])
+            w.writeheader()
+            for r in preds:
+                w.writerow(r)
+        print(f"wrote {len(preds)} stance rows to {args.out}")
+
+    if args.source != "file" and capture_s < duration_s - 1.0 and not stalled:
+        print(f"NOTE: capture ran {capture_s:.1f}s, {duration_s - capture_s:.1f}s "
+              f"short of the requested {duration_s:g}s")
+    if RS.SOURCE_DROPS["n"]:
+        print(f"NOTE: {RS.SOURCE_DROPS['n']} lines dropped at the source hand-off")
+
+    if stalled:
+        print(f"FAIL: stalled -- {stalled}")
+        return 1
+    if interrupted:
+        print("FAIL: interrupted (Ctrl-C); partial run above")
+        return 130
+    return RS.exit_code(c, loss_pct, args.source)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

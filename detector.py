@@ -89,7 +89,7 @@ SENSOR_COORDS = {
 #   dropout     62 fr       7623..7812          0..1147              219
 #   standing     -          6381..6824             (never falls)       -
 #
-# MAX_DURATION is the exception: it was re-set from REAL data in Prompt 14.
+# MAX_DURATION is the exception: it was re-set from REAL data afterwards.
 # See its comment below.
 #
 T_ON         = 1200   # RETUNE: entry threshold, total force across six channels.
@@ -250,3 +250,155 @@ def stance_report(detected, truth):
         "mean_duration_error": sum(duration_errors) / n,
     }
 
+
+# ---------------------------------------------------------------------------
+# Streaming twin of find_stances + merge_close
+# ---------------------------------------------------------------------------
+class StanceTracker:
+    """find_stances() and merge_close(), one frame at a time.
+
+    infer_live.py cannot call find_stances on a stream: it needs the stance
+    the moment it closes, and it needs to know about the stances find_stances
+    throws away, because on real data those were most of them (MAX_DURATION
+    at 120 discarded 17/35 walk and 28/30 shuffle contacts). This class runs
+    the identical state machine incrementally and REPORTS every decision
+    instead of silently dropping the losers.
+
+    Contract, checked by test_infer_live.py on every sim fixture, every sim
+    session, every real capture and a few thousand random sequences:
+
+        [(s, e) for kind, s, e in events if kind == "stance"]
+            == merge_close(find_stances(total))
+
+    when every value of `total` is pushed in order and flush() is called at
+    the end. Same thresholds, same inclusive (start, end) pairs, same latch.
+
+    push(x) returns a list of events for this frame, each a tuple
+    (kind, start, end):
+
+        "stance"         a merged stance is final. Nothing that arrives later
+                         can change it. This is the only kind that reaches
+                         the feature extractor.
+        "discarded_max"  a run reached max_duration and was thrown away,
+                         exactly as find_stances does (standing, or a stuck
+                         sensor). end is the frame the break fired on.
+        "rejected_min"   a run ended before min_duration. Noise spike.
+
+    Event latency: a stance is held back until the merge window closes, i.e.
+    until the frame index passes end + gap without a new run starting inside
+    it. That is at most GAP_MERGE frames (120 ms at 100 Hz) after the run
+    ends, plus the next run's own length if a mergeable run does start.
+
+    The one thing this cannot reproduce until it is told the input has ended
+    is find_stances's EOF rule: an open run at end of input is a stance if
+    its length is within [min, max]. flush() applies that rule. A live source
+    calls it when the capture window closes.
+
+    State that crosses a read boundary lives here and nowhere else: in_stance,
+    armed, start, and the pending (not yet merge-final) stance. The caller
+    only feeds frames.
+    """
+
+    def __init__(self, t_on=T_ON, t_off=T_OFF, min_duration=MIN_DURATION,
+                 max_duration=MAX_DURATION, gap=GAP_MERGE):
+        self.t_on = t_on
+        self.t_off = t_off
+        self.min_duration = min_duration
+        self.max_duration = max_duration
+        self.gap = gap
+        self.i = -1
+        self.in_stance = False
+        self.armed = True
+        self.start = 0
+        self.pending = None          # (start, end) merged-so-far, not yet final
+        self.n_stances = 0
+        self.n_discarded_max = 0
+        self.n_rejected_min = 0
+
+    # -- the two pieces of find_stances, kept in its order --------------------
+    def _raw_stance(self, start, end):
+        """A run find_stances would have appended. Apply merge_close to it."""
+        if self.pending is not None:
+            p_start, p_end = self.pending
+            if start - p_end - 1 < self.gap:
+                self.pending = (p_start, end)
+                return []
+            self.n_stances += 1
+            self.pending = (start, end)
+            return [("stance", p_start, p_end)]
+        self.pending = (start, end)
+        return []
+
+    def _release_pending(self):
+        """Emit the pending stance once no future run can merge into it.
+
+        merge_close joins a run starting at s into the previous stance ending
+        at e iff s - e - 1 < gap, i.e. s <= e + gap. Not in a run at index i
+        means any future run starts at >= i + 1, so nothing can merge once
+        i + 1 > e + gap.
+        """
+        if self.pending is None or self.in_stance:
+            return []
+        p_start, p_end = self.pending
+        if self.i + 1 > p_end + self.gap:
+            self.pending = None
+            self.n_stances += 1
+            return [("stance", p_start, p_end)]
+        return []
+
+    def push(self, x):
+        self.i += 1
+        i = self.i
+        events = []
+        if self.in_stance:
+            if x < self.t_off:
+                if i - self.start >= self.min_duration:
+                    events += self._raw_stance(self.start, i - 1)
+                else:
+                    self.n_rejected_min += 1
+                    events.append(("rejected_min", self.start, i - 1))
+                self.in_stance = False
+            elif i - self.start >= self.max_duration:
+                self.in_stance = False
+                self.armed = False
+                self.n_discarded_max += 1
+                events.append(("discarded_max", self.start, i))
+        else:
+            if not self.armed:
+                if x < self.t_off:
+                    self.armed = True
+            elif x >= self.t_on:
+                self.start = i
+                self.in_stance = True
+        events += self._release_pending()
+        return events
+
+    def flush(self):
+        """End of input: find_stances's EOF rule, then release what is pending."""
+        events = []
+        i = self.i
+        if self.in_stance:
+            length = i - self.start + 1
+            if self.min_duration <= length <= self.max_duration:
+                events += self._raw_stance(self.start, i)
+            self.in_stance = False
+        if self.pending is not None:
+            p_start, p_end = self.pending
+            self.pending = None
+            self.n_stances += 1
+            events.append(("stance", p_start, p_end))
+        return events
+
+    def earliest_live_index(self):
+        """Lowest frame index a future event can still reference, or None.
+
+        A caller keeping a frame buffer for feature extraction can drop every
+        frame below this. It is the start of the run in progress or of the
+        pending stance, whichever is earlier.
+        """
+        idxs = []
+        if self.in_stance:
+            idxs.append(self.start)
+        if self.pending is not None:
+            idxs.append(self.pending[0])
+        return min(idxs) if idxs else None
