@@ -63,3 +63,9 @@ CLAUDE.md
 
 # The analysis notebook writes its stance animation to the cwd (repo root).
 /stance.gif
+
+# Streams the quickstart and a bare `python -m insole.gait_gen` write into the
+# repo root. The fixtures live in data/sim/; these are throwaway.
+/demo_walk.*
+/sim_*.txt
+/faulty.*

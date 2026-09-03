@@ -62,7 +62,7 @@ N_FRAMES = G.DURATION_S * G.SAMPLE_HZ            # frames the board emits in 60 
 KEYS = ("valid", "malformed", "empty", "bad_checksum", "seq_breaks", "lost",
         "timing_breaks", "resets", "status")
 
-# SHA-256 of each make_sessions.py session as written by the generator BEFORE
+# SHA-256 of each make_sessions.py session as the generator wrote it BEFORE
 # the fault modes existed (same fixed seeds). Byte identity with faults off.
 PINNED = {
     "sim_walk_00.txt":    "40d9c1c913b1cc958c01e124e8c81ee074fb07177af49fff02708599e3a8883a",
