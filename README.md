@@ -211,6 +211,50 @@ edits. `noise_stats.py` reports per-channel mean, standard deviation, min, max,
 peak-to-peak, and a count of samples beyond five standard deviations, which is
 what sets a defensible `T_ON` / `T_OFF` in the stance detector.
 
+## Fault handling
+
+`gait_gen.py` can inject three link faults into any simulated stream, so the
+logger and the streamer are exercised against a misbehaving link without a
+board. All three are off by default and the generator is byte-identical with
+them off (`test_faults.py` pins the twelve session hashes).
+
+```
+python gait_gen.py --out faulty.txt --drop-rate 0.01 --corrupt-rate 0.005 --reset-at 30 --fault-seed 1
+python read_serial.py faulty.txt faulty.csv      # counters, exit 1
+python infer_live.py faulty.txt                  # stances flagged, exit 1
+```
+
+The policy, and where each piece lives:
+
+| fault (flag) | what the wire carries | logger (`read_serial.py`) | streamer (`infer_live.py`) | counter | test |
+| --- | --- | --- | --- | --- | --- |
+| frame lost (`--drop-rate`) | a sequence gap | drop and count; no row written, nothing reconstructed | same counters; a stance whose span contains a gap is flagged with `gap_frames` beside its prediction and in `--out`; features use the frames that arrived | `lost`, `seq_breaks` | `test_faults.py::test_drop_mode` |
+| bad checksum (`--corrupt-rate`) | a well-formed frame with the wrong checksum | drop and count; the frame consumed a sequence slot, so its gap is credited to `bad_checksum`, not counted a second time as loss | same; the stance is one frame shorter and flagged | `bad_checksum` | `test_faults.py::test_corrupt_mode` |
+| board reset (`--reset-at`) | boot text, then `SEQ` and `ts_us` restart at 0 | count once; re-seed the sequence and timing validators from the first post-reset frame; not also a seq break, loss or timing break | same; the stance in progress is discarded (its end is unobservable), a complete pending stance is released, the running-median dt and the frame buffer are cleared, later stances carry the next `epoch` | `resets` | `test_faults.py::test_reset_mode` |
+
+Both consumers run the same `read_serial.FrameValidator`, and
+`test_faults.py::test_logger_streamer_consistency` feeds one stream carrying
+all three faults to both, over a file and over the fake serial source, and
+asserts identical counters. The accounting identity it checks is
+`valid + lost + bad_checksum == frames the board emitted`, up to frames lost
+right at a reset boundary, which no host can see. Sensor values are never
+imputed, which is the same rule as for s4's below-threshold zeros.
+
+Exit code under injected faults (unchanged semantics plus one addition):
+`malformed`, `bad_checksum` or `empty` fail on every transport; `lost`,
+`seq_breaks` or `timing_breaks` fail on file and serial, while BLE tolerates
+up to 2 % loss; `resets` now fails on every transport, because a reboot
+mid-capture leaves a file whose time axis restarts, and over native USB CDC
+or BLE the boot text never reaches the host, so the clock is the only
+evidence.
+
+What real hardware can still do that this does not anticipate: well-formed
+frames carrying wrong physics (an intermittent channel as in the `_01`
+captures, the single-frame correlated dips, FSR relaxation drift); a BLE link
+left half-open, where notifications stop without a disconnect and only the
+inactivity watchdog sees the symptom; and a brownout on battery, which is a
+reset the host may never get a frame from.
+
 ## Analysis pipeline
 
 [insole.ipynb](insole.ipynb) runs on a saved CSV and is written for Colab.

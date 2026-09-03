@@ -107,6 +107,33 @@ def test_merge_close():
     return passed, failed
 
 
+REAL = os.path.join(REPO, "data", "real")
+# (as-captured filename, stances after find_stances + merge_close)
+REAL_COUNTS = [("stand_02.csv", 0), ("walk02.csv", 35),
+               ("fast02.csv", 48), ("shuffle02.csv", 30)]
+
+
+def test_real_stance_counts():
+    """Stance counts on the real _02 captures at the committed thresholds.
+
+    Prediction, written before the first run: stand 0, walk 35, fast 48,
+    shuffle 30 (analyze_real.py C5 and sweep_max_duration.py at
+    MAX_DURATION = 200). This is the only test that can see MAX_DURATION: no
+    simulated stance exceeds 60 frames, so every sim fixture above passes at
+    any ceiling from 120 to 1000, while at 120 these four read 0 / 18 / 48 / 2
+    (over-ceiling runs are discarded, not clipped). Four minutes of real data
+    from one subject; a regression fixture, not evidence about generalisation.
+    """
+    passed = failed = 0
+    for fname, want in REAL_COUNTS:
+        total = total_force(os.path.join(REAL, fname))
+        got = len(D.merge_close(D.find_stances(total)))
+        ok = check(f"data/real/{fname:14s} stances={got:3d} want={want:3d}", got == want,
+                   f"MAX_DURATION={D.MAX_DURATION}")
+        passed, failed = (passed + ok, failed + (not ok))
+    return passed, failed
+
+
 def test_true_stances():
     """Guard the cadence bug: truth must scale with cycle_s, in count and width."""
     passed = failed = 0
@@ -125,7 +152,8 @@ def test_true_stances():
 
 if __name__ == "__main__":
     total_pass = total_fail = 0
-    for suite in (test_true_stances, test_merge_close, test_streams):
+    for suite in (test_true_stances, test_merge_close, test_streams,
+                  test_real_stance_counts):
         print(f"--- {suite.__name__} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f

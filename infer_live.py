@@ -39,6 +39,19 @@ than "nothing arriving". The counters that matter most:
         Frames where all six sensors read 0. features.cop_frame returns
         (nan, nan) for those by documented behaviour; cop_features skips
         them. Nothing here adds handling to detector.py or features.py.
+    gap_frames / resets
+        Link faults (gait_gen's fault modes; README "Fault handling"). A
+        frame that never arrived or failed its checksum is dropped and
+        counted by read_serial.FrameValidator, never reconstructed. A stance
+        whose span has a hole in it, for either reason, is FLAGGED with the
+        number of frames missing strictly inside it -- gap_frames, printed
+        beside the prediction and written to --out -- and its features are computed
+        over the frames that did arrive, exactly as the batch path treats
+        the same CSV. A board reset (device clock ran backwards) is counted
+        once: the stance in progress is discarded (StanceTracker.reset), a
+        stance already complete is released, the running-median dt and the
+        frame buffer are cleared, and t_start_s restarts with the new epoch
+        (the `epoch` column). Sensor values are never imputed.
 
 What the model sees
 -------------------
@@ -258,9 +271,9 @@ def counters_line(v, tr, k):
     c = v.c
     n = max(c["valid"], 1)
     return (f"valid={c['valid']} bad={c['malformed'] + c['bad_checksum'] + c['empty']} "
-            f"seq_breaks={c['seq_breaks']} lost={c['lost']} | "
+            f"seq_breaks={c['seq_breaks']} lost={c['lost']} resets={c['resets']} | "
             f"stances={tr.n_stances} discarded>MAX={tr.n_discarded_max} "
-            f"rejected<MIN={tr.n_rejected_min} | "
+            f"discarded@reset={tr.n_discarded_reset} rejected<MIN={tr.n_rejected_min} | "
             f"extrap={100.0 * k['extrap'] / n:.1f}% s4=0:{100.0 * k['s4zero'] / n:.1f}% "
             f"allzero={k['allzero']}")
 
@@ -310,10 +323,11 @@ def main(argv=None):
     tr = D.StanceTracker()
     timers = Timers()
     dts = RunningMedianDt()
-    buf = deque()                      # (idx, ts_us, vals) for frames still live
+    buf = deque()                      # (idx, ts_us, vals, gain, gap_before) for frames still live
     k = Counter()                      # extrap, s4zero, allzero, predicted, no_pred
     preds = []                         # per-stance records
     idx = -1
+    epoch = 0                          # incremented at every board reset
     first_ts = None
     t_first = t_last = None
     last_status = time.time()
@@ -323,11 +337,12 @@ def main(argv=None):
 
     def handle(events, now_s):
         for kind, s, e in events:
-            if kind == "discarded_max":
+            if kind in ("discarded_max", "discarded_reset"):
                 if not args.quiet:
-                    print(f"discard  frames {s:6d}..{e:6d} ran {e - s + 1} frames >= "
-                          f"MAX_DURATION={D.MAX_DURATION}: DISCARDED, not clipped  | "
-                          + counters_line(v, tr, k))
+                    why = (f"ran {e - s + 1} frames >= MAX_DURATION={D.MAX_DURATION}: "
+                           f"DISCARDED, not clipped" if kind == "discarded_max" else
+                           f"in progress at a board reset: DISCARDED, end not observable")
+                    print(f"discard  frames {s:6d}..{e:6d} {why}  | " + counters_line(v, tr, k))
                 continue
             if kind != "stance":
                 continue
@@ -336,6 +351,10 @@ def main(argv=None):
             first_idx = buf[0][0]
             rows = [(r[1], r[2]) for r in islice(buf, s - first_idx, e - first_idx + 1)]
             assert len(rows) == e - s + 1, (len(rows), s, e, first_idx)
+            # Frames missing strictly inside the span (lost or rejected): the
+            # slots absent before each frame after the first. A gap before
+            # frame s itself is outside the stance.
+            gap_frames = sum(r[4] for r in islice(buf, s - first_idx + 1, e - first_idx + 1))
             ft = features_for(rows, dts.dt_s())
             timers.tick("feature", t0)
             # predict ------------------------------------------------------
@@ -350,14 +369,15 @@ def main(argv=None):
             timers.tick("predict", t0)
             t_start = (rows[0][0] - first_ts) / 1e6
             rec = {"stance": tr.n_stances, "start": s, "end": e,
-                   "n_frames": e - s + 1, "t_start_s": t_start, "pred": label}
+                   "n_frames": e - s + 1, "t_start_s": t_start,
+                   "epoch": epoch, "gap_frames": gap_frames, "pred": label}
             rec.update({c: ft[c] for c in FEATURE_COLS})
             preds.append(rec)
             if not args.quiet:
                 print(f"stance {tr.n_stances:4d}  frames {s:6d}..{e:6d} "
                       f"({e - s + 1:3d} fr, {ft['contact_time_s']:.2f} s) t={t_start:7.2f}s  "
                       f"path={ft['cop_path_len']:.4f} disp={ft['cop_displacement']:.4f}"
-                      f"  -> {label:8s} | " + counters_line(v, tr, k))
+                      f"  -> {label:8s} gap_frames={gap_frames} | " + counters_line(v, tr, k))
 
     lines = make_lines(args.source, args.in_path, duration_s, args.port)
     it = iter(lines)
@@ -390,6 +410,20 @@ def main(argv=None):
             if row is None:
                 continue
             seq, ts_us, vals = row
+            if v.last_reset:
+                # The board rebooted. Settle the tracker first (it may release
+                # a complete stance whose frames are still in buf), then drop
+                # every frame from before the reset: no future stance can
+                # reach across it, and the device clock has restarted.
+                handle(tr.reset(), now)
+                buf.clear()
+                dts = RunningMedianDt()
+                first_ts = None
+                epoch += 1
+                if not args.quiet:
+                    print(f"reset    board rebooted (SEQ and ts_us restarted): epoch {epoch}, "
+                          f"run in progress discarded, dt state cleared  | "
+                          + counters_line(v, tr, k))
             idx += 1
             t_last = now
             if first_ts is None:
@@ -412,7 +446,7 @@ def main(argv=None):
 
             # detect ------------------------------------------------------
             t0 = perf_counter()
-            buf.append((idx, ts_us, vals, g))
+            buf.append((idx, ts_us, vals, g, v.last_gap))
             events = tr.push(sum(vals))
             timers.tick("detect", t0)
 
@@ -443,12 +477,14 @@ def main(argv=None):
     print(f"source={args.source} valid={c['valid']} malformed={c['malformed']} "
           f"empty={c['empty']} bad_checksum={c['bad_checksum']} "
           f"seq_breaks={c['seq_breaks']} lost={c['lost']} loss={loss_pct:.2f}% "
-          f"timing_breaks={c['timing_breaks']} status={c['status']} "
+          f"timing_breaks={c['timing_breaks']} resets={c['resets']} status={c['status']} "
           f"source_drops={RS.SOURCE_DROPS['n']} capture_s={capture_s:.1f} device_s={device_s:.1f}")
     n = max(c["valid"], 1)
     print(f"stances completed={tr.n_stances} discarded>MAX_DURATION({D.MAX_DURATION})="
-          f"{tr.n_discarded_max} rejected<MIN_DURATION({D.MIN_DURATION})={tr.n_rejected_min} "
-          f"predicted={k['predicted']} no_prediction={k['no_pred']}")
+          f"{tr.n_discarded_max} discarded@reset={tr.n_discarded_reset} "
+          f"rejected<MIN_DURATION({D.MIN_DURATION})={tr.n_rejected_min} "
+          f"predicted={k['predicted']} no_prediction={k['no_pred']} "
+          f"stances_with_gaps={sum(1 for r in preds if r['gap_frames'])}")
     print(f"frames extrapolating (any sensor > {C.CAL_MAX_COUNTS} counts)={k['extrap']} "
           f"({100.0 * k['extrap'] / n:.1f}%)  s4=0 frames={k['s4zero']} "
           f"({100.0 * k['s4zero'] / n:.1f}%)  all-zero frames={k['allzero']}")
@@ -467,7 +503,8 @@ def main(argv=None):
     if args.out:
         with open(args.out, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["stance", "start", "end", "n_frames",
-                                              "t_start_s"] + FEATURE_COLS + ["pred"])
+                                              "t_start_s", "epoch", "gap_frames"]
+                               + FEATURE_COLS + ["pred"])
             w.writeheader()
             for r in preds:
                 w.writerow(r)

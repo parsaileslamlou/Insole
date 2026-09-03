@@ -420,15 +420,44 @@ class FrameValidator:
     plus first_ts / last_ts (device clock) for the span report. The host-clock
     bookkeeping stays in the caller, because only the caller knows what clock
     it is on (test_capture_window substitutes a fake one).
+
+    Fault policy (README "Fault handling"; gait_gen's fault modes exercise it):
+
+      unrecoverable frame   a bad checksum or a frame that never arrived is
+                            DROPPED and COUNTED. No row is produced, nothing
+                            is reconstructed. A corrupt frame still consumed
+                            a sequence number, so the gap it leaves is
+                            credited to bad_checksum and NOT also to lost:
+                            valid + lost + bad_checksum equals the frames the
+                            board emitted (up to frames lost at a reset
+                            boundary, which no host can see).
+      reset                 the device clock runs backwards: the board
+                            rebooted and re-latched t0 (SEQ restarts too, but
+                            the first post-reset frame may itself have been
+                            lost, so the clock is the signature). Counted once
+                            in `resets`; the sequence and timing validators
+                            are re-seeded from that frame, and the
+                            discontinuity is NOT also counted as a seq break,
+                            loss or timing break -- those describe a link that
+                            dropped or delayed frames, a different fault.
+
+    After feed() returns a row, last_gap is the number of sequence slots
+    missing immediately before it -- lost OR rejected, because a stance with
+    a hole in it has a hole either way -- and last_reset says whether it is
+    the first frame after a reset. infer_live.py reads both: the first flags
+    a stance that spans a gap, the second discards the stance in progress.
     """
 
     def __init__(self):
         self.c = dict(valid=0, malformed=0, empty=0, bad_checksum=0,
-                      seq_breaks=0, timing_breaks=0, status=0, lost=0)
+                      seq_breaks=0, timing_breaks=0, status=0, lost=0, resets=0)
         self.prev_seq = None
         self.prev_ts = None
         self.first_ts = None     # device clock (ts_us) at the first valid frame
         self.last_ts = None      # device clock at the last valid frame
+        self.rejected_since_valid = 0   # bad-checksum frames since the last valid one
+        self.last_gap = 0
+        self.last_reset = False
 
     def feed(self, line):
         c = self.c
@@ -442,24 +471,40 @@ class FrameValidator:
         row, reason = parse_frame(line)
         if row is None:
             c[reason] += 1
+            if reason == "bad_checksum":
+                # A well-formed frame with the wrong checksum occupied a
+                # sequence slot. Malformed lines are not credited: boot text
+                # (no slot) and a truncated frame (one slot) look the same.
+                self.rejected_since_valid += 1
             return None
 
         seq, ts_us, vals = row
+        self.last_gap = 0
+        self.last_reset = False
 
         if self.prev_seq is not None:
-            # uint16 sequence, wraps every 65536 frames (~11 min at 100 Hz)
-            delta = (seq - self.prev_seq) % 65536
-            if delta != 1:
-                c["seq_breaks"] += 1
-                c["lost"] += max(delta - 1, 0)
-            # Expected time gap scales with the number of frames spanned, so
-            # a dropped frame is counted ONCE (as loss) and not a second
-            # time as a timing fault.
-            if self.prev_ts is not None and delta > 0:
-                expected = PERIOD_US * delta
-                if abs((ts_us - self.prev_ts) - expected) > TIMING_TOL_US:
-                    c["timing_breaks"] += 1
+            if ts_us < self.prev_ts:
+                c["resets"] += 1
+                self.last_reset = True
+            else:
+                # uint16 sequence, wraps every 65536 frames (~11 min at 100 Hz)
+                delta = (seq - self.prev_seq) % 65536
+                if delta != 1:
+                    missing = max(delta - 1, 0)          # slots absent, any reason
+                    gap = max(missing - self.rejected_since_valid, 0)
+                    if gap or delta == 0:
+                        c["seq_breaks"] += 1
+                    c["lost"] += gap
+                    self.last_gap = missing
+                # Expected time gap scales with the number of frames spanned,
+                # so a dropped frame is counted ONCE (as loss) and not a
+                # second time as a timing fault.
+                if delta > 0:
+                    expected = PERIOD_US * delta
+                    if abs((ts_us - self.prev_ts) - expected) > TIMING_TOL_US:
+                        c["timing_breaks"] += 1
 
+        self.rejected_since_valid = 0
         self.prev_seq, self.prev_ts = seq, ts_us
         if self.first_ts is None:
             self.first_ts = ts_us
@@ -514,6 +559,9 @@ def main(argv=None):
                     continue
 
                 seq, ts_us, vals = row
+                if v.last_reset:
+                    print(f"reset: board rebooted at host t={now - t_first:.1f}s "
+                          f"(SEQ and ts_us restarted); rows continue in the same file")
                 t_last = now
                 w.writerow([seq, ts_us] + vals)
         except StallError as exc:
@@ -535,7 +583,8 @@ def main(argv=None):
           f"empty={c['empty']} bad_checksum={c['bad_checksum']} "
           f"seq_breaks={c['seq_breaks']} lost={c['lost']} "
           f"loss={loss_pct:.2f}% timing_breaks={c['timing_breaks']} "
-          f"status={c['status']} source_drops={SOURCE_DROPS['n']} "
+          f"resets={c['resets']} status={c['status']} "
+          f"source_drops={SOURCE_DROPS['n']} "
           f"capture_s={capture_s:.1f} device_s={device_s:.1f}")
 
     # source_drops is the host throwing lines away because its own hand-off
@@ -578,9 +627,20 @@ def exit_code(c, loss_pct, source):
           On BLE this is the radio doing what radios do. Gated on a RATE, not
           a count, so the check still means something: a capture that loses 30%
           of its frames still fails.
+
+      RESET       the board rebooted mid-capture (device clock ran backwards)
+          Never acceptable on any transport: the ts_us axis restarts, so the
+          file is two captures glued together, not the one that was asked
+          for. Its boot text usually also lands in `malformed`, but over
+          native USB CDC or BLE the boot text never reaches the host and the
+          clock is the only evidence, so this is gated on its own.
     """
     if c["malformed"] or c["bad_checksum"] or c["empty"]:
         print("FAIL: corrupted frames present")
+        return 1
+
+    if c["resets"]:
+        print(f"FAIL: board reset mid-capture ({c['resets']}x; SEQ and ts_us restarted)")
         return 1
 
     if c["valid"] == 0:

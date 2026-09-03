@@ -314,6 +314,34 @@ class StanceTracker:
         self.n_stances = 0
         self.n_discarded_max = 0
         self.n_rejected_min = 0
+        self.n_discarded_reset = 0
+
+    def reset(self):
+        """The board rebooted between the last frame and the next.
+
+        Returns the events that boundary settles. A pending stance -- complete,
+        waiting out its merge window -- is released as a stance: nothing on the
+        far side of a reset can merge into it. The run in progress is thrown
+        away and reported as "discarded_reset": its frames before the reset
+        are real, but its end is not observable, and a truncated stance fed to
+        the classifier would look like a whole one. Re-entry is then blocked
+        until force falls below t_off, exactly as after a max_duration discard,
+        so the remainder of the split stance is not reported as a fresh short
+        one either. The frame index keeps counting; the caller's index space is
+        its own.
+        """
+        events = []
+        if self.pending is not None:
+            p_start, p_end = self.pending
+            self.pending = None
+            self.n_stances += 1
+            events.append(("stance", p_start, p_end))
+        if self.in_stance:
+            self.in_stance = False
+            self.n_discarded_reset += 1
+            events.append(("discarded_reset", self.start, self.i))
+        self.armed = False
+        return events
 
     # -- the two pieces of find_stances, kept in its order --------------------
     def _raw_stance(self, start, end):
