@@ -15,8 +15,13 @@ Usage:
     read_serial.py                          live BLE  -> readings.csv
     read_serial.py --source ble    out.csv  live BLE  -> out.csv
     read_serial.py --source serial out.csv  live USB  -> out.csv
+    read_serial.py --source serial --port COM13 --duration 30 out.csv
     read_serial.py in.txt out.csv           replay a saved capture
     read_serial.py --source file in.txt out.csv
+
+--port and --duration override PORT and DURATION_S for one run, so a machine
+whose board enumerates on a different COM port needs no local edit to this
+file.
 
 Both paths are optional. --source defaults to "file" when an input path is
 given and "ble" otherwise, so the notebook's
@@ -35,10 +40,13 @@ import csv
 import argparse
 
 # ---------------------------------------------------------------------------
-# Configuration. These are DEFAULTS for the CLI below, not the live values —
-# nothing downstream reads them at runtime. In particular no function takes one
-# as a default argument value: that binds at import time and cannot be
-# overridden by assigning to the module attribute afterwards.
+# Configuration. These are DEFAULTS for the CLI below, not the live values.
+# The line sources take `duration_s=None` / `port=None` and resolve the module
+# attribute AT CALL TIME. An earlier version used `duration_s=DURATION_S` as
+# the default argument, which binds at import: assigning
+# read_serial.DURATION_S afterwards then changed the runaway guard in main()
+# but NOT the capture length, because make_source() had already captured 60.
+# That trap is closed by _resolve() below; do not reintroduce it.
 # ---------------------------------------------------------------------------
 DEFAULT_SOURCE = "ble"      # "serial" | "file" | "ble"
 
@@ -57,6 +65,15 @@ TIMING_TOL_US = 3000        # how far a gap may stray from its expected value
 # or malformed frames are, on every transport. See exit_code() below.
 BLE_LOSS_TOLERANCE_PCT = 2.0
 
+# Data-inactivity watchdog for LIVE sources. A board that stops sending while
+# the link stays up -- firmware wedged, radio associated but silent, USB CDC
+# stalled -- produces no line, so no counter moves and no check in exit_code()
+# can see it. The capture would sit until DURATION_S expires and then exit 0
+# with a clean but short file, which is the dataset-ruining mode. Each live
+# source raises StallError when no line has arrived for this long. File replay
+# is exempt: a file cannot stall.
+STALL_S = 3.0
+
 NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 SENSOR_COLS = ["s0", "s1", "s2", "s3", "s4", "s5"]
@@ -74,19 +91,44 @@ SOURCE_DROPS = {"n": 0}
 # ---------------------------------------------------------------------------
 # Line sources
 # ---------------------------------------------------------------------------
-def serial_lines(port=PORT, baud=BAUD, duration_s=DURATION_S):
+class StallError(RuntimeError):
+    """A live source produced no line for STALL_S seconds.
+
+    Raised from inside the source generator, so it surfaces in the consumer's
+    for-loop and cannot be swallowed by a counter that never moved.
+    """
+
+
+def _resolve(value, default):
+    """Call-time default: None means 'whatever the module attribute is now'."""
+    return default if value is None else value
+
+
+def serial_lines(port=None, baud=None, duration_s=None, stall_s=None):
     import serial
-    ser = serial.Serial(port, baud, timeout=1)
+    port = _resolve(port, PORT)
+    baud = _resolve(baud, BAUD)
+    duration_s = _resolve(duration_s, DURATION_S)
+    stall_s = _resolve(stall_s, STALL_S)
+    # readline() returns b"" after `timeout` seconds of silence; the stall
+    # check has to be coarser than that or every quiet second would trip it.
+    ser = serial.Serial(port, baud, timeout=min(1.0, stall_s))
     ser.reset_input_buffer()
     t_warm = time.time()
     while time.time() - t_warm < 1.0:      # discard boot chatter
         ser.readline()
     t0 = time.time()
+    t_data = t0
     try:
         while time.time() - t0 < duration_s:
             raw = ser.readline()
             if not raw:
+                if time.time() - t_data > stall_s:
+                    raise StallError(
+                        f"serial {port}: no data for {stall_s:.1f}s "
+                        f"(port open, board silent)")
                 continue
+            t_data = time.time()
             yield raw.decode("ascii", errors="ignore").strip()
     finally:
         ser.close()
@@ -98,7 +140,7 @@ def file_lines(path):
             yield raw.strip()
 
 
-def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
+def ble_lines(device_name=None, duration_s=None, stall_s=None):
     """Live BLE source.
 
     All asyncio and threading is confined to this function. It returns a plain
@@ -119,6 +161,10 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
     import threading
     import queue as _queue
     from bleak import BleakScanner, BleakClient
+
+    device_name = _resolve(device_name, BLE_NAME)
+    duration_s = _resolve(duration_s, DURATION_S)
+    stall_s = _resolve(stall_s, STALL_S)
 
     out = _queue.Queue(maxsize=20000)
     SENTINEL = object()
@@ -220,22 +266,37 @@ def ble_lines(device_name=BLE_NAME, duration_s=DURATION_S):
 
     threading.Thread(target=_pump, daemon=True).start()
 
+    # Discovery and connect can legitimately take longer than STALL_S, so the
+    # watchdog arms at the first line, not at start. Before that the only
+    # timeout is bleak's own 15 s scan inside _run().
+    armed = False
     while True:
-        item = out.get()
+        try:
+            item = out.get(timeout=stall_s if armed else None)
+        except _queue.Empty:
+            raise StallError(
+                f"ble {device_name}: no data for {stall_s:.1f}s "
+                f"(connected, no notifications)")
         if item is SENTINEL:
             return
+        armed = True
         yield item
 
 
-def make_source(source, in_path=None, duration_s=DURATION_S):
+def make_source(source, in_path=None, duration_s=None, port=None, stall_s=None):
+    """The seam. Everything past here consumes an iterator of strings.
+
+    None for duration_s / port / stall_s means the module attribute as it is
+    at CALL time (DURATION_S / PORT / STALL_S) -- see the configuration note.
+    """
     if source == "serial":
-        return serial_lines(duration_s=duration_s)
+        return serial_lines(port=port, duration_s=duration_s, stall_s=stall_s)
     if source == "file":
         if in_path is None:
             raise ValueError("source 'file' requires an input path")
         return file_lines(in_path)
     if source == "ble":
-        return ble_lines(duration_s=duration_s)
+        return ble_lines(duration_s=duration_s, stall_s=stall_s)
     raise ValueError(f"unknown source {source!r}")
 
 
@@ -284,6 +345,10 @@ def build_parser():
     p.add_argument("--source", choices=("serial", "file", "ble"), default=None,
                    help="transport; defaults to 'file' when in_path is given, "
                         "else '%s'" % DEFAULT_SOURCE)
+    p.add_argument("--port", default=None,
+                   help=f"serial port for --source serial (default: {PORT})")
+    p.add_argument("--duration", type=float, default=None, metavar="SECONDS",
+                   help=f"live capture length (default: DURATION_S = {DURATION_S})")
     return p
 
 
@@ -342,77 +407,120 @@ def resolve_args(argv=None):
     return args
 
 
+class FrameValidator:
+    """The per-line validation and accounting main() does, as one object.
+
+    infer_live.py runs the same checks on the same lines, so they live here
+    once. feed(line) returns (seq, ts_us, vals) for a valid frame and None for
+    anything else, and bumps exactly the counters main() used to bump inline:
+
+        valid, malformed, empty, bad_checksum, status,
+        seq_breaks, lost, timing_breaks
+
+    plus first_ts / last_ts (device clock) for the span report. The host-clock
+    bookkeeping stays in the caller, because only the caller knows what clock
+    it is on (test_capture_window substitutes a fake one).
+    """
+
+    def __init__(self):
+        self.c = dict(valid=0, malformed=0, empty=0, bad_checksum=0,
+                      seq_breaks=0, timing_breaks=0, status=0, lost=0)
+        self.prev_seq = None
+        self.prev_ts = None
+        self.first_ts = None     # device clock (ts_us) at the first valid frame
+        self.last_ts = None      # device clock at the last valid frame
+
+    def feed(self, line):
+        c = self.c
+        if not line:
+            c["empty"] += 1
+            return None
+        if line.startswith("#"):          # firmware status line, not a frame
+            c["status"] += 1
+            return None
+
+        row, reason = parse_frame(line)
+        if row is None:
+            c[reason] += 1
+            return None
+
+        seq, ts_us, vals = row
+
+        if self.prev_seq is not None:
+            # uint16 sequence, wraps every 65536 frames (~11 min at 100 Hz)
+            delta = (seq - self.prev_seq) % 65536
+            if delta != 1:
+                c["seq_breaks"] += 1
+                c["lost"] += max(delta - 1, 0)
+            # Expected time gap scales with the number of frames spanned, so
+            # a dropped frame is counted ONCE (as loss) and not a second
+            # time as a timing fault.
+            if self.prev_ts is not None and delta > 0:
+                expected = PERIOD_US * delta
+                if abs((ts_us - self.prev_ts) - expected) > TIMING_TOL_US:
+                    c["timing_breaks"] += 1
+
+        self.prev_seq, self.prev_ts = seq, ts_us
+        if self.first_ts is None:
+            self.first_ts = ts_us
+        self.last_ts = ts_us
+        c["valid"] += 1
+        return row
+
+    def loss_pct(self):
+        expected_total = self.c["valid"] + self.c["lost"]
+        return (100.0 * self.c["lost"] / expected_total) if expected_total else 0.0
+
+
 def main(argv=None):
     args = resolve_args(argv)
+    duration_s = _resolve(args.duration, DURATION_S)
 
-    c = dict(valid=0, malformed=0, empty=0, bad_checksum=0,
-             seq_breaks=0, timing_breaks=0, status=0, lost=0)
+    v = FrameValidator()
+    c = v.c
 
     SOURCE_DROPS["n"] = 0       # per run, so an in-process second call is clean
 
-    prev_seq = None
-    prev_ts = None
-
     t_first = None      # host clock at the first line of any kind
     t_last = None       # host clock at the last valid frame
-    first_ts = None     # device clock (ts_us) at the first valid frame
-    last_ts = None      # device clock at the last valid frame
+    stalled = None
 
     with open(args.out_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(CSV_HEADER)
 
-        for line in make_source(args.source, args.in_path):
-            now = time.time()
-            # This guard exists to stop a live source that never ends. It runs
-            # from the FIRST LINE, not from process start, so time spent
-            # discovering and connecting is not charged against the capture
-            # window -- that is what silently shortened BLE runs. Anchoring on
-            # the first line is transport-agnostic on purpose: serial_lines()
-            # also burns a second on boot chatter before its first line.
-            if t_first is None:
-                t_first = now
-            elif now - t_first > DURATION_S + 5:
-                break
+        source = make_source(args.source, args.in_path,
+                             duration_s=duration_s, port=args.port)
+        try:
+            for line in source:
+                now = time.time()
+                # This guard exists to stop a live source that never ends. It
+                # runs from the FIRST LINE, not from process start, so time
+                # spent discovering and connecting is not charged against the
+                # capture window -- that is what silently shortened BLE runs.
+                # Anchoring on the first line is transport-agnostic on
+                # purpose: serial_lines() also burns a second on boot chatter
+                # before its first line.
+                if t_first is None:
+                    t_first = now
+                elif now - t_first > duration_s + 5:
+                    break
 
-            if not line:
-                c["empty"] += 1
-                continue
-            if line.startswith("#"):          # firmware status line, not a frame
-                c["status"] += 1
-                print(line)
-                continue
+                if line.startswith("#"):      # echo status lines as they pass
+                    print(line)
 
-            row, reason = parse_frame(line)
-            if row is None:
-                c[reason] += 1
-                continue
+                row = v.feed(line)
+                if row is None:
+                    continue
 
-            seq, ts_us, vals = row
+                seq, ts_us, vals = row
+                t_last = now
+                w.writerow([seq, ts_us] + vals)
+        except StallError as exc:
+            stalled = str(exc)
 
-            if prev_seq is not None:
-                # uint16 sequence, wraps every 65536 frames (~11 min at 100 Hz)
-                delta = (seq - prev_seq) % 65536
-                if delta != 1:
-                    c["seq_breaks"] += 1
-                    c["lost"] += max(delta - 1, 0)
-                # Expected time gap scales with the number of frames spanned, so
-                # a dropped frame is counted ONCE (as loss) and not a second
-                # time as a timing fault.
-                if prev_ts is not None and delta > 0:
-                    expected = PERIOD_US * delta
-                    if abs((ts_us - prev_ts) - expected) > TIMING_TOL_US:
-                        c["timing_breaks"] += 1
-
-            prev_seq, prev_ts = seq, ts_us
-            if first_ts is None:
-                first_ts = ts_us
-            last_ts, t_last = ts_us, now
-            c["valid"] += 1
-            w.writerow([seq, ts_us] + vals)
-
-    expected_total = c["valid"] + c["lost"]
-    loss_pct = (100.0 * c["lost"] / expected_total) if expected_total else 0.0
+    first_ts, last_ts = v.first_ts, v.last_ts
+    loss_pct = v.loss_pct()
 
     # Two spans, deliberately both reported, because they are different clocks:
     #   capture_s  host wall clock, first valid frame -> last. What the session
@@ -441,9 +549,16 @@ def main(argv=None):
     # A short session should be visible, not inferred from a low frame count.
     # Reporting only -- it does not change the exit code. Live sources only:
     # a file replay finishes in well under DURATION_S by design.
-    if args.source != "file" and capture_s < DURATION_S - 1.0:
-        print(f"NOTE: capture ran {capture_s:.1f}s, {DURATION_S - capture_s:.1f}s "
-              f"short of the requested {DURATION_S}s")
+    if args.source != "file" and capture_s < duration_s - 1.0:
+        print(f"NOTE: capture ran {capture_s:.1f}s, {duration_s - capture_s:.1f}s "
+              f"short of the requested {duration_s}s")
+
+    # A stall is a hard failure whatever the counters say: the frames written
+    # so far are fine, but the capture is not the one that was asked for, and
+    # exit 0 here is exactly the silent mode the watchdog exists to remove.
+    if stalled:
+        print(f"FAIL: stalled -- {stalled}")
+        return 1
 
     return exit_code(c, loss_pct, args.source)
 

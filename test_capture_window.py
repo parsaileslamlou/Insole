@@ -107,7 +107,7 @@ def fake_source(clock, discovery_s, n_frames):
     the capture is clean by every check except length.
     """
 
-    def make(source, in_path=None, duration_s=None):
+    def make(source, in_path=None, **_kw):     # port=, duration_s=, stall_s= ignored
         def gen():
             clock.advance(discovery_s)
             for i in range(n_frames):
