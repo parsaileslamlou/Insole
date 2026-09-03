@@ -12,7 +12,7 @@ first non-circular test of everything the simulator was tuned against.
 **Start here:** [notebooks/demo.ipynb](notebooks/demo.ipynb) runs the whole
 pipeline without hardware, spec to heatmap, in a few seconds, with the real
 captures beside the simulated ones; its outputs are committed so it reads on
-GitHub.
+GitHub. [docs/writeup.md](docs/writeup.md) is the project in 600 words.
 
 ## Data path
 
@@ -55,7 +55,7 @@ GitHub.
 | [scripts/](scripts/) | Programs that are run, never imported: `train_real.py` (the real-data classifier and its analysis), `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`. |
 | [tests/](tests/) | Every test. Each runs directly (PASS/FAIL lines, nonzero exit on failure) and under pytest. |
 | [notebooks/](notebooks/) | [demo.ipynb](notebooks/demo.ipynb), the run-all demonstration (start here); [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
-| [docs/](docs/) | [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
+| [docs/](docs/) | [writeup.md](docs/writeup.md) (the project in 600 words), [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
 | [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (trained on the real captures). |
 | [data/real/](data/real/) | Four real captures, `_02` set (training/evaluation) and `_01` set (failure evidence). Read its README first. |
 | [data/sim/](data/sim/) | The five committed simulator fixtures `sim_*.txt`; generated CSVs and sessions land here too and are ignored. |
@@ -149,7 +149,7 @@ Always start from a fresh session.
 | 15 | Fault injection and robustness | `insole/gait_gen.py` fault modes, `tests/test_faults.py` | done |
 | 16 | Repository consolidation, this README | package layout | done |
 | 17 | Demo notebook | [notebooks/demo.ipynb](notebooks/demo.ipynb), `figures/demo/` | done |
-| 18 | Writeup | `docs/writeup.md` | pending |
+| 18 | Writeup | [docs/writeup.md](docs/writeup.md) | done |
 | 19 | Final pass, `run_demo.sh`, hardware notes | | pending |
 | 20 | Classifier trained on the real captures | `scripts/train_real.py`, [docs/real_results.md](docs/real_results.md) | done; a per-session split is not possible with one session per class, so the headline is time-blocked within session |
 
