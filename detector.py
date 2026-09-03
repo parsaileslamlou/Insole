@@ -89,6 +89,9 @@ SENSOR_COORDS = {
 #   dropout     62 fr       7623..7812          0..1147              219
 #   standing     -          6381..6824             (never falls)       -
 #
+# MAX_DURATION is the exception: it was re-set from REAL data in Prompt 14.
+# See its comment below.
+#
 T_ON         = 1200   # RETUNE: entry threshold, total force across six channels.
                       # Must clear the 285 between-stance noise peak but sit well
                       # under the shuffle stance peak (~3400). At 2000 the shuffle
@@ -101,8 +104,20 @@ MIN_DURATION =   15   # RETUNE: frames; must be BELOW the shortest stance you in
                       # to support. Shortest detected stance is the shuffle at 25
                       # frames. Still rejects the single-frame noise spike, which
                       # is what this guard was actually for.
-MAX_DURATION =  120   # RETUNE: frames; must be ABOVE the longest real stance
-                      # (58 detected) and below "standing" (unbounded).
+MAX_DURATION =  200   # RETUNE: frames; must be ABOVE the longest real stance
+                      # and below "standing" (unbounded). Was 120, set from the
+                      # longest SIMULATED stance (58 frames). The real _02
+                      # captures (data/real/, analyze_real.py C5) showed natural
+                      # contacts of 84..144 frames walking and 96..164 shuffling,
+                      # so 120 discarded 17/35 walk and 28/30 shuffle contacts
+                      # outright. 200 = 2.0 s at 100 Hz: 22% above the longest
+                      # observed contact (164) and 30x below the one thing it
+                      # exists to reject, the 6000-frame standing run. Every
+                      # value from 165 to 1000 gives identical counts on all
+                      # four real captures and all five sim fixtures; 200 is
+                      # the round one. No sim stance exceeds 60 frames, so the
+                      # sim tests cannot see this change -- it rests on four
+                      # minutes of real data from one subject.
 GAP_MERGE    =   12   # RETUNE: frames; two detections closer than this are one
                       # stance. Tightest true separation is the shuffle at 19
                       # frames of truth / ~24 frames as detected, so this must
@@ -234,3 +249,4 @@ def stance_report(detected, truth):
         "mean_end_offset": sum(end_offsets) / n,
         "mean_duration_error": sum(duration_errors) / n,
     }
+
