@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_utc": "2026-09-03T09:14:12Z",
+  "created_utc": "2026-09-03T09:31:11Z",
   "kind": "qda",
   "classes": [
     "fast",
@@ -9,16 +9,16 @@
   ],
   "means": [
     [
-      0.8862290606357025,
-      0.7043399606390676
+      0.8595350330563201,
+      0.714732648233071
     ],
     [
-      0.8232492849185574,
-      0.6392465144765769
+      0.8105671102430047,
+      0.6518864145909977
     ],
     [
-      0.9767350738997727,
-      0.7018654023587841
+      0.908372881111903,
+      0.711076654476441
     ]
   ],
   "priors": [
@@ -34,32 +34,32 @@
   "covs": [
     [
       [
-        0.0009554336418644343,
-        0.0003462082710637163
+        0.0005413365140307482,
+        0.00030228953952083417
       ],
       [
-        0.0003462082710637163,
-        0.0004637585010427934
+        0.00030228953952083417,
+        0.0003587582266864609
       ]
     ],
     [
       [
-        0.0020415537107918258,
-        0.0007381994129591777
+        0.0015085123170275878,
+        0.0007112757569051333
       ],
       [
-        0.0007381994129591777,
-        0.0009220646390235063
+        0.0007112757569051333,
+        0.0007896460494435352
       ]
     ],
     [
       [
-        0.0018579709174814704,
-        4.7116561819528814e-05
+        0.0009388260922427107,
+        0.00011551000793365876
       ],
       [
-        4.7116561819528814e-05,
-        0.0005742657116353915
+        0.00011551000793365876,
+        0.0004482529546034869
       ]
     ]
   ],
@@ -69,9 +69,10 @@
       "cop_path_len",
       "cop_displacement"
     ],
-    "training_data": "SIMULATED: 12 gait_gen sessions via make_sessions.py, stances by detector.find_stances + merge_close, features by features.extract_features. Not evidence about hardware.",
+    "training_data": "SIMULATED: 12 gait_gen sessions via make_sessions.py, stances by detector.find_stances + merge_close on raw counts, features by features.extract_features on representation B (conductance). Not evidence about hardware.",
+    "representation": "conductance",
     "frame": "data/sim/features_sessions.csv",
-    "frame_sha256": "46b964ed7ec9bca9913c848b84936bfd80a354e3a690a6a7afda187f081b8abc",
+    "frame_sha256": "05628738f1f122ca8ec995dc86e0b0100b502c1170cd74ed144c8bcf323e5d38",
     "n_rows": 1123,
     "sessions": [
       "sim_fast_00",
@@ -101,11 +102,11 @@
       ],
       "n_train": 853,
       "n_test": 270,
-      "accuracy": 0.9259259259259259,
-      "n_correct": 250,
-      "wilson95_lo": 0.8883615716214477,
-      "wilson95_hi": 0.9515400357311241,
-      "wald_se": 0.015938203070812416
+      "accuracy": 0.9296296296296296,
+      "n_correct": 251,
+      "wilson95_lo": 0.8927148404768516,
+      "wilson95_hi": 0.9544902591135686,
+      "wald_se": 0.01556567702591867
     },
     "geometry": {
       "insole_len_mm": 274.0,

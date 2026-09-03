@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "created_utc": "2026-09-03T09:35:27Z",
+  "kind": "lda",
+  "classes": [
+    "fast",
+    "shuffle",
+    "walk"
+  ],
+  "means": [
+    [
+      0.9067140140096122,
+      0.605488033900604
+    ],
+    [
+      0.9958103874653,
+      0.3490091803175075
+    ],
+    [
+      0.9280210001488902,
+      0.5005740370946445
+    ]
+  ],
+  "priors": [
+    0.4247787610619469,
+    0.26548672566371684,
+    0.30973451327433627
+  ],
+  "counts": [
+    48,
+    30,
+    35
+  ],
+  "cov": [
+    [
+      0.05002775065196928,
+      0.006854727381376221
+    ],
+    [
+      0.006854727381376221,
+      0.018097088835805342
+    ]
+  ],
+  "meta": {
+    "purpose": "classifier trained on the real _02 captures; loaded by infer_live.py with --model",
+    "training_data": "REAL: data/real _02 set, one 60 s session per class, one subject, figure-8 path, tethered USB; stances by detector.find_stances + merge_close on raw counts at the committed thresholds",
+    "sessions": [
+      "fast02",
+      "shuffle02",
+      "walk02"
+    ],
+    "n_rows": 113,
+    "class_counts": {
+      "fast": 48,
+      "shuffle": 30,
+      "walk": 35
+    },
+    "representation": "conductance",
+    "representation_letter": "B",
+    "gain_match": null,
+    "feature_set": "cop",
+    "features": [
+      "cop_path_len",
+      "cop_displacement"
+    ],
+    "split": "time-blocked within each session: first 60% of stances train, last 40% test, guard band 0 -- NOT a per-session split",
+    "heldout_check": {
+      "n_train": 68,
+      "n_test": 45,
+      "accuracy": 0.5777777777777777,
+      "n_correct": 26,
+      "wilson95_lo": 0.433005327959445,
+      "wilson95_hi": 0.7103151201831219,
+      "test_floor": 0.4222222222222222,
+      "block_cv_accuracy": 0.5752212389380531,
+      "random_split_mean": 0.5933333333333333
+    },
+    "geometry": {
+      "insole_len_mm": 274.0,
+      "insole_width_mm": 91.0,
+      "sensor_mm": {
+        "s0": [
+          33.0,
+          50.8
+        ],
+        "s1": [
+          50.8,
+          50.8
+        ],
+        "s2": [
+          76.2,
+          152.4
+        ],
+        "s3": [
+          81.3,
+          185.4
+        ],
+        "s4": [
+          25.4,
+          203.2
+        ],
+        "s5": [
+          25.4,
+          254.0
+        ]
+      }
+    },
+    "detector": {
+      "T_ON": 1200,
+      "T_OFF": 450,
+      "MIN_DURATION": 15,
+      "MAX_DURATION": 200,
+      "GAP_MERGE": 12
+    },
+    "git_hash": "a7a803b",
+    "fit_script": "scripts/train_real.py"
+  }
+}

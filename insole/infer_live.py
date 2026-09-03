@@ -55,14 +55,18 @@ than "nothing arriving". The counters that matter most:
 
 What the model sees
 -------------------
-Features are computed on RAW COUNTS, exactly as the batch path
-(features.extract_features on a read_serial CSV) computes them and exactly as
-the training frame was built. The gain match IS applied every frame -- in
-conductance space, via calibration.apply_gain_match -- and its output is
-carried in the per-stance record (--out) and drives the extrap counter, but
-it does not feed the detector or the features. Feeding gain-matched
-conductance into CoP would put the model on a distribution it was never
-trained on; changing that means retraining, which is a later decision.
+Features are computed on the SHIPPED representation
+(insole.representations.SHIPPED, conductance x = counts / (4095 - counts)
+per channel), exactly as the batch path (representations.features_under on
+a read_serial CSV) computes them and exactly as the training frames were
+built -- scripts/bakeoff.py for the sim models, scripts/train_real.py for the
+real ones. The detector still runs on raw counts. The gain match IS applied
+every frame -- in conductance space, via calibration.apply_gain_match -- and
+its output is carried in the buffer and drives the extrap counter, but it
+does not feed the features: on the real captures it scored no better than
+plain conductance while extrapolating on most loaded frames
+(docs/real_results.md). A model whose meta names a different representation
+is refused at startup rather than fed a distribution it was not trained on.
 
 The persisted model is fitted on SIMULATED sessions (scripts/fit_model.py). On the
 real _02 captures the same recipe scored far below the majority floor
@@ -98,6 +102,7 @@ from insole import detector as D
 from insole import read_serial as RS
 from insole.discriminant import load_model, predict
 from insole.features import cop_features, cop_trajectory, stance_features
+from insole.representations import LETTER, SHIPPED, transform_frames
 
 from insole.paths import MODELS, REPO as _REPO
 
@@ -214,12 +219,14 @@ class RunningMedianDt:
 def features_for(rows, dt):
     """The batch feature functions applied to one stance's frames.
 
-    `rows` is the (ts_us, vals) list for frames start..end INCLUSIVE. The
-    notebook-lifted extractors slice [start:end], which drops the last frame;
-    passing (0, n-1) here reproduces that exactly.
+    `rows` is the (ts_us, vals) list for frames start..end INCLUSIVE, vals
+    being raw counts; they are transformed to the shipped representation
+    here, once, on the way in. The notebook-lifted extractors slice
+    [start:end], which drops the last frame; passing (0, n-1) here
+    reproduces that exactly.
     """
     n = len(rows)
-    df = pd.DataFrame([r[1] for r in rows], columns=D.SENSOR_COLS)
+    df = pd.DataFrame(transform_frames([r[1] for r in rows], SHIPPED), columns=D.SENSOR_COLS)
     total = df[D.SENSOR_COLS].sum(axis=1)
     out = stance_features(total, dt, 0, n - 1)
     out.update(cop_features(cop_trajectory(df, 0, n - 1)))
@@ -287,6 +294,11 @@ def main(argv=None):
     model = load_model(args.model)
     meta = model.get("meta", {})
     feat_names = meta.get("features", ["cop_path_len", "cop_displacement"])
+    model_rep = meta.get("representation")
+    if model_rep is not None and model_rep != SHIPPED:
+        print(f"FAIL: {args.model} was fitted on representation {model_rep!r}; this "
+              f"script feeds {SHIPPED!r} (insole.representations.SHIPPED). Refit it.")
+        return 2
 
     gm = None
     if args.gain.lower() != "none":
@@ -312,6 +324,10 @@ def main(argv=None):
     print(f"detector  : T_ON={D.T_ON} T_OFF={D.T_OFF} MIN_DURATION={D.MIN_DURATION} "
           f"MAX_DURATION={D.MAX_DURATION} GAP_MERGE={D.GAP_MERGE}  "
           f"(a run > MAX_DURATION is DISCARDED, not clipped)")
+    print(f"features  : representation {LETTER[SHIPPED]} ({SHIPPED}) on every source; "
+          f"the detector sees raw counts"
+          + (f"; model fitted on {model_rep!r}" if model_rep else
+             "; model meta names no representation (pre-stage-20 fit)"))
     if gm is not None:
         print("gain match: " + "  ".join(f"s{i}={gm['corrections'][i]:.4f}" for i in range(6))
               + f"  applied to x = counts/({gm['fs_counts']:g} - counts); "
@@ -496,8 +512,7 @@ def main(argv=None):
         if args.label:
             agree = sum(1 for r in preds if r["pred"] == args.label)
             print(f"agreement with --label {args.label!r}: {agree}/{len(preds)} "
-                  f"= {agree / len(preds):.4f}  (plumbing check on a sim-trained model, "
-                  f"not an accuracy)")
+                  f"= {agree / len(preds):.4f}  (agreement with a typed label, not an accuracy)")
     print()
     print("per-stage timing (perf_counter; 'read' is time waiting on the source):")
     timers.report()

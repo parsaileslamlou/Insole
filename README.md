@@ -30,26 +30,28 @@ first non-circular test of everything the simulator was tuned against.
             detector.find_stances       detector.StanceTracker ─ same state machine
                      │                          │
                      ▼                          ▼
-            features.extract_features   features.* per stance ─ bit-identical
+            features.* on representation B   features.* per stance ─ bit-identical
                      │                          │
                      ▼                          ▼
-            discriminant LDA / QDA      models/model_lda.json  ─> prediction per stance
+            discriminant LDA / QDA      models/model_*.json  ─> prediction per stance
 
-  gain match (models/gain_match.json, real board only; sim = identity gains)
-  is applied per frame in conductance space and, today, feeds only the
-  extrapolation counter -- the classifier consumes raw-count CoP (stage 20).
+  The detector sees raw counts. The features see representation B,
+  conductance x = counts / (4095 − counts) per channel, on every source
+  (insole/representations.py, chosen on the real captures at stage 20). The
+  gain match (models/gain_match.json) is applied per frame in conductance
+  space and drives the extrapolation counter only.
 ```
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| [insole/](insole/) | The package: everything a test or another module imports. `gait_gen` (frame codec + simulator + fault modes), `read_serial` (logger, the transport seam, the validator), `infer_live` (streaming inference), `detector`, `features`, `discriminant`, `calibration`, `fit_calibration`, `heatmap`, `make_sessions`, `paths`. |
-| [scripts/](scripts/) | Programs that are run, never imported: `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`. |
+| [insole/](insole/) | The package: everything a test or another module imports. `gait_gen` (frame codec + simulator + fault modes), `read_serial` (logger, the transport seam, the validator), `infer_live` (streaming inference), `detector`, `features`, `representations` (what the features see), `splits`, `discriminant`, `calibration`, `fit_calibration`, `heatmap`, `make_sessions`, `paths`. |
+| [scripts/](scripts/) | Programs that are run, never imported: `train_real.py` (the real-data classifier and its analysis), `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`. |
 | [tests/](tests/) | Every test. Each runs directly (PASS/FAIL lines, nonzero exit on failure) and under pytest. |
 | [notebooks/](notebooks/) | [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
-| [docs/](docs/) | [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md). |
-| [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained deployment classifiers). |
+| [docs/](docs/) | [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
+| [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (trained on the real captures). |
 | [data/real/](data/real/) | Four real captures, `_02` set (training/evaluation) and `_01` set (failure evidence). Read its README first. |
 | [data/sim/](data/sim/) | The five committed simulator fixtures `sim_*.txt`; generated CSVs and sessions land here too and are ignored. |
 | [cal_data/](cal_data/) | 42 bench calibration captures and their manifest. |
@@ -90,11 +92,16 @@ pip install -e ".[analysis,test,notebook]"
    ```
    python -m insole.infer_live demo_walk.txt --label walk --quiet
    ...
+   features  : representation B (conductance) on every source; the detector sees raw counts; model fitted on 'conductance'
+   ...
    stances completed=60 discarded>MAX_DURATION(200)=0 discarded@reset=0 rejected<MIN_DURATION(15)=0 predicted=60 no_prediction=0 stances_with_gaps=0
    frames extrapolating (any sensor > 824 counts)=3420 (57.0%)  s4=0 frames=2388 (39.8%)  all-zero frames=43
-   predictions: fast=2  walk=58
-   agreement with --label 'walk': 58/60 = 0.9667  (plumbing check on a sim-trained model, not an accuracy)
+   predictions: fast=6  walk=54
+   agreement with --label 'walk': 54/60 = 0.9000  (agreement with a typed label, not an accuracy)
    ```
+
+   The default model is the sim-trained LDA. `--model models/model_qda_real.json`
+   loads the one trained on the real captures ([docs/real_results.md](docs/real_results.md)).
 
 4. Build the 12 simulated sessions and the feature frame, and run the bake-off
    (writes `data/sim/features_sessions.csv`; the test suite reads it):
@@ -106,8 +113,8 @@ pip install -e ".[analysis,test,notebook]"
 5. Run the tests:
 
    ```
-   python -m pytest -q                 # 40 passed
-   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (265 across the eight files)
+   python -m pytest -q                 # 44 passed
+   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (293 across the nine files)
    ```
 
 The notebook runs from a fresh clone too: `jupyter nbconvert --to notebook
@@ -139,7 +146,7 @@ start from a fresh session.
 | 17 | Demo notebook | `notebooks/demo.ipynb` | pending |
 | 18 | Writeup | `docs/writeup.md` | pending |
 | 19 | Final pass, `run_demo.sh`, hardware notes | | pending |
-| 20 | Classifier trained on the real captures | `scripts/train_real.py`, `docs/real_results.md` | pending; a per-session split is not possible with one session per class |
+| 20 | Classifier trained on the real captures | `scripts/train_real.py`, [docs/real_results.md](docs/real_results.md) | done; a per-session split is not possible with one session per class, so the headline is time-blocked within session |
 
 ## Hardware
 
@@ -249,18 +256,34 @@ reset the host may never get a frame from.
 Every number here is printed by the named script; regenerate before quoting.
 
 **Simulated bake-off** (`python scripts/bakeoff.py`; [docs/bakeoff.md](docs/bakeoff.md)).
-Two CoP features only, session-disjoint split, 270 held-out stances, majority
-floor 0.4296. Logistic regression 0.9037, LDA 0.9296, QDA 0.9259, Wilson 95 %
-intervals in the doc. The three models' fast→walk errors are 7 / 3 / 6 rows
-with 3 in common. Simulated data is not evidence about hardware: the
-generator's constants, the detector thresholds and the tests over them were
-co-evolved, so this result is internally consistent by construction.
+Two CoP features only, features under representation B, session-disjoint
+split, 270 held-out stances, majority floor 0.4296. Logistic regression
+0.9185, LDA 0.9185, QDA 0.9296, Wilson 95 % intervals in the doc. The three
+models' fast→walk errors are 7 / 5 / 5 rows with 4 in common. Simulated data is
+not evidence about hardware: the generator's constants, the detector
+thresholds and the tests over them were co-evolved, so this result is
+internally consistent by construction.
 
 **Sim-trained model on the real captures** (`python scripts/sim_vs_real.py`,
 D2). On the 113 real moving stances (walk 35, fast 48, shuffle 30) the
-sim-trained LDA scores 0.2566 and QDA 0.2478, below the 0.4248 majority floor.
+sim-trained LDA scores 0.3097 and QDA 0.2566, below the 0.4248 majority floor.
 That is the expected outcome for a model fitted on a simulator, and it is a
 plumbing check, not a classifier result.
+
+**Classifier trained on the real captures** (`python scripts/train_real.py`;
+[docs/real_results.md](docs/real_results.md), every number regenerated by
+the script). Headline, chosen by a rule fixed before any result was seen
+(CoP-only features; the representation and model with the best
+contiguous-block CV accuracy): representation B, QDA, time-blocked test
+accuracy 0.6444 [0.4984, 0.7678] (29/45) against a test floor of 0.4222,
+block-CV 0.6372, random stance-level split 0.6433. This is a within-session
+number: one session per class, the first 60 % of each session's stances
+train and the last 40 % test, so it carries the leakage that implies and is
+not a per-session result. With all seven features (contact time and its
+relatives included) the best cell reaches 0.9111 [0.7927, 0.9649], riding on
+cadence. The doc lists every misclassified stance with a figure, measures the
+s4-zero and gain-match effects on the CoP in millimetres, and checks peak
+force against onset time.
 
 **Real captures through the pipeline** (`python scripts/analyze_real.py`;
 [docs/sim_vs_real.md](docs/sim_vs_real.md)). Stances at the committed
@@ -272,9 +295,6 @@ detector's `MAX_DURATION` was raised from 120 to 200 on this data
 (`python scripts/sweep_max_duration.py`): at 120 it discarded 17 of 35 walk and
 28 of 30 shuffle contacts outright, because real contacts here run 84–164
 frames while no simulated stance exceeds 60.
-
-**Classifier trained on real data:** stage 20, pending. It will live in
-`scripts/train_real.py` and `docs/real_results.md`.
 
 ## Analysis notebook
 
@@ -292,7 +312,7 @@ says so.
 ## Tests
 
 ```
-python -m pytest -q                 # everything, from the repository root (40 functions)
+python -m pytest -q                 # everything, from the repository root (44 functions)
 python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 ```
 
@@ -306,6 +326,7 @@ python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 | [tests/test_infer_live.py](tests/test_infer_live.py) | Streaming == batch features on every capture; read boundaries; malformed frames; all-zero frames; `MAX_DURATION` discards; file/serial/BLE parity; no state leaks; the stall watchdog. | 56 |
 | [tests/test_faults.py](tests/test_faults.py) | The three fault modes through logger and streamer; byte identity with faults off; the accounting identity; the CLI. | 55 |
 | [tests/test_parse_frame.py](tests/test_parse_frame.py) | The frame codec's rejection paths (frame spec section 8). | 9 |
+| [tests/test_train_real.py](tests/test_train_real.py) | The splits (no overlap, order, sizes, contiguous blocks); identity gains make C equal B; the shipped representation reproduces the bake-off frame and raw counts still give the pre-switch figure; `scripts/train_real.py` end to end. | 28 |
 
 `tests/test_infer_live.py` needs `data/sim/features_sessions.csv`, which
 `python scripts/bakeoff.py` builds; without it one check reports the missing
@@ -334,8 +355,12 @@ file and the fix.
   and `GAP_MERGE` were chosen against streams whose constants were co-evolved
   with them; only `MAX_DURATION` has been set from real data, and only real
   data can exercise it.
-- **The classifier feeds on raw-count CoP**; the gain match drives a counter
-  only. Stage 20 decides the input representation on the real data.
+- **The features see conductance (representation B), not the gain match.**
+  Stage 20 chose it on the real captures by a pre-registered rule; the
+  gain-matched representation C scored no better there while extrapolating
+  on most loaded frames, so the gain match drives the extrapolation counter
+  only. The margin between the representations is a couple of stances in
+  113; this is a decision, not a finding.
 - **Firmware, left as is:** `Serial.printf` from core 0 can interleave with
   frame writes from core 1 (rare, MTU transition only); the BLE gather loop's
   size-guard discard neither increments `bleDropped` nor advances the cursor

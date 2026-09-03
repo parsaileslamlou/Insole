@@ -12,7 +12,10 @@ geometry.
 > current. Two figures in this document were also found to be unsupported and
 > are corrected in place below with a note: the `~940` calibration ceiling
 > (C3, B4) and the `data/real/README.md` s4 ordering (finding 2, now fixed in
-> that file).
+> that file). D2 was regenerated at stage 20 under the shipped feature
+> representation (conductance): sim-trained LDA 0.3097 (35/113), QDA 0.2566
+> (29/113), still below the 0.4248 floor; `python scripts/sim_vs_real.py`
+> prints the current figures.
 
 ## Regeneration
 

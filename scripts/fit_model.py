@@ -37,6 +37,7 @@ from insole import detector as D
 from insole.discriminant import accuracy_ci, fit_lda, fit_qda, predict, save_model
 from insole.make_sessions import CLASSES, session_name
 from insole.paths import DATA_SIM, MODELS, REPO as _REPO
+from insole.representations import LETTER, SHIPPED
 
 REPO = str(_REPO)
 FRAME_CSV = os.path.join(DATA_SIM, "features_sessions.csv")
@@ -121,8 +122,10 @@ def main(argv=None):
         "features": FEATURES,
         "training_data": (
             "SIMULATED: 12 gait_gen sessions via make_sessions.py, stances by "
-            "detector.find_stances + merge_close, features by "
-            "features.extract_features. Not evidence about hardware."),
+            "detector.find_stances + merge_close on raw counts, features by "
+            f"features.extract_features on representation {LETTER[SHIPPED]} ({SHIPPED}). "
+            "Not evidence about hardware."),
+        "representation": SHIPPED,
         "frame": os.path.relpath(args.frame, REPO),
         "frame_sha256": sha256_of(args.frame),
         "n_rows": int(len(frame)),

@@ -34,7 +34,7 @@ from insole import detector as D
 from insole import infer_live as IL
 from insole import read_serial as RS
 from insole.discriminant import fit_lda, fit_qda, load_model, predict, save_model
-from insole.features import extract_features
+from insole.representations import SHIPPED, features_under
 
 from insole.paths import CAL_DATA, DATA_REAL, DATA_SIM, MODELS, REPO as _REPO
 
@@ -82,9 +82,10 @@ def ensure_csv(stem):
 
 
 def batch_features(csv_path, label="x"):
+    """The batch path: detect on raw counts, features under the shipped representation."""
     df = pd.read_csv(csv_path)
     total = df[D.SENSOR_COLS].sum(axis=1).to_numpy()
-    return extract_features(df, D.merge_close(D.find_stances(total)), label)
+    return features_under(df, D.merge_close(D.find_stances(total)), label, SHIPPED)
 
 
 def run_infer(argv, quiet=True):

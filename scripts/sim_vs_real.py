@@ -32,6 +32,7 @@ from insole.features import (                                            # noqa:
     cop_frame, extract_features, frame_dt,
 )
 from insole.discriminant import fit_lda, fit_qda, predict                # noqa: E402
+from insole.representations import LETTER, SHIPPED, features_under       # noqa: E402
 
 from insole.paths import DATA_REAL, DATA_SIM, FIGURES, REPO as _REPO   # noqa: E402
 
@@ -101,6 +102,8 @@ def d2_plumbing(real_feats):
     sim = pd.read_csv(frame_path)
     print(f"training frame: {frame_path}  ({len(sim)} sim stances, "
           f"{sim['session'].nunique()} sessions)")
+    print(f"feature representation on both sides: {LETTER[SHIPPED]} ({SHIPPED}), "
+          f"insole.representations.SHIPPED")
 
     Xtr = sim[FEATURES].to_numpy(float)
     ytr = sim["label"].to_numpy()
@@ -378,7 +381,10 @@ def main():
         real, sim = load_real(rfile), load_sim(sfile)
         r_st, s_st = stances_of(real), stances_of(sim)
         pairs_data.append((name, real, sim, r_st, s_st))
-        real_feats[name] = (extract_features(real, r_st, name) if r_st
+        # D2 feeds the sim-trained model, so its features are computed under the
+        # shipped representation the model was fitted on; D4's tables stay on
+        # raw counts (per_stance_metrics), where peak counts mean counts.
+        real_feats[name] = (features_under(real, r_st, name, SHIPPED) if r_st
                             else pd.DataFrame([]))
 
     print("Prompt 13 Phase D -- simulator vs the real _02 captures")

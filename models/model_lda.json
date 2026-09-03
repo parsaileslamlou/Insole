@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_utc": "2026-09-03T09:14:12Z",
+  "created_utc": "2026-09-03T09:31:11Z",
   "kind": "lda",
   "classes": [
     "fast",
@@ -9,16 +9,16 @@
   ],
   "means": [
     [
-      0.8862290606357025,
-      0.7043399606390676
+      0.8595350330563201,
+      0.714732648233071
     ],
     [
-      0.8232492849185574,
-      0.6392465144765769
+      0.8105671102430047,
+      0.6518864145909977
     ],
     [
-      0.9767350738997727,
-      0.7018654023587841
+      0.908372881111903,
+      0.711076654476441
     ]
   ],
   "priors": [
@@ -33,12 +33,12 @@
   ],
   "cov": [
     [
-      0.0016143145161798243,
-      0.00045011339418087385
+      0.0010410167677891,
+      0.0004375451616311391
     ],
     [
-      0.00045011339418087385,
-      0.0006838555338757985
+      0.0004375451616311391,
+      0.0005626018781359983
     ]
   ],
   "meta": {
@@ -47,9 +47,10 @@
       "cop_path_len",
       "cop_displacement"
     ],
-    "training_data": "SIMULATED: 12 gait_gen sessions via make_sessions.py, stances by detector.find_stances + merge_close, features by features.extract_features. Not evidence about hardware.",
+    "training_data": "SIMULATED: 12 gait_gen sessions via make_sessions.py, stances by detector.find_stances + merge_close on raw counts, features by features.extract_features on representation B (conductance). Not evidence about hardware.",
+    "representation": "conductance",
     "frame": "data/sim/features_sessions.csv",
-    "frame_sha256": "46b964ed7ec9bca9913c848b84936bfd80a354e3a690a6a7afda187f081b8abc",
+    "frame_sha256": "05628738f1f122ca8ec995dc86e0b0100b502c1170cd74ed144c8bcf323e5d38",
     "n_rows": 1123,
     "sessions": [
       "sim_fast_00",
@@ -79,11 +80,11 @@
       ],
       "n_train": 853,
       "n_test": 270,
-      "accuracy": 0.9296296296296296,
-      "n_correct": 251,
-      "wilson95_lo": 0.8927148404768516,
-      "wilson95_hi": 0.9544902591135686,
-      "wald_se": 0.01556567702591867
+      "accuracy": 0.9185185185185185,
+      "n_correct": 248,
+      "wilson95_lo": 0.8797170949781553,
+      "wilson95_hi": 0.9455775278987196,
+      "wald_se": 0.016649129624349345
     },
     "geometry": {
       "insole_len_mm": 274.0,
