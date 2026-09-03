@@ -8,12 +8,13 @@ The wire format between board and host is specified in
 [framespec.md](framespec.md). That document is the contract; the firmware, the
 host logger, and the simulator all implement it and must not diverge from it.
 
-**Status:** board assembled, bring-up in progress. The firmware, frame codec,
-host logger, and analysis pipeline are written and exercised end to end against
-a simulator. The board is soldered and the ADC pin mapping is confirmed against
-it; the physical sensor coordinates and every `RETUNE` threshold are still
-provisional, because those need measurement rather than assembly (see
-[Open items](#open-items)).
+**Status:** board assembled, first real dataset captured. The firmware, frame
+codec, host logger, calibration, stance detector, feature extraction,
+classifier bake-off and a streaming inference script are written and exercised
+end to end against both the simulator and the four real captures in
+[data/real/](data/real/). Sensor coordinates are measured (±15 mm).
+`MAX_DURATION` is set from real data; the other four detector thresholds are
+still simulator-derived `RETUNE` values (see [Open items](#open-items)).
 
 ## Repository layout
 
@@ -21,14 +22,23 @@ provisional, because those need measurement rather than assembly (see
 | --- | --- |
 | [framespec.md](framespec.md) | Wire-format specification. Frame layout, checksum, sample rate, validation gates, design rationale. |
 | [firmware/insole/](firmware/insole/) | Arduino sketch for the ESP32-S3. Samples six channels, frames them, paces the sample clock against an absolute deadline. |
-| [read_serial.py](read_serial.py) | Host logger. Reads frames from the serial port, validates them, writes `readings.csv`. |
+| [read_serial.py](read_serial.py) | Host logger. One seam, three line sources (`--source file|serial|ble`): validates frames, writes a CSV, exits nonzero on corruption, loss, or a silent board. |
+| [infer_live.py](infer_live.py) | Streaming inference over the same seam: detector → features → persisted classifier, one frame at a time, with live counters for discarded stances, extrapolating frames and s4 zeros. |
+| [calibration.py](calibration.py) | Conductance transform, per-sensor force fit, and the relative gain match (`apply_gain_match`, conductance space). Stdlib only. |
+| [features.py](features.py) | Per-stance features and centre of pressure, lifted byte-for-byte from the notebook so scripts and tests share them. |
+| [discriminant.py](discriminant.py) | LDA/QDA from scratch, Wilson accuracy interval, JSON save/load of a fitted model. |
+| [fit_model.py](fit_model.py) | Fits the deployment classifier from `features_sessions.csv` and writes `model_lda.json` with its fit metadata. |
+| [bakeoff.py](bakeoff.py) / [bakeoff.md](bakeoff.md) | Session-disjoint LDA / QDA / logistic-regression comparison on the simulated sessions. |
+| [analyze_real.py](analyze_real.py), [sim_vs_real.py](sim_vs_real.py) | The real `_02` captures through the pipeline, and the simulator against them. Every number in [docs/sim_vs_real.md](docs/sim_vs_real.md) is printed by one of these. |
+| [data/real/](data/real/) | First measured-position gait dataset: stand / walk / fast / shuffle, 60 s each. Read its README before using `_01`. |
+| [cal_data/](cal_data/), [gain_match.json](gain_match.json) | Bench calibration captures and the single-point relative gain match derived from them. |
+| [docs/](docs/) | Write-ups: calibration notes, sim vs real. |
 | [gait_gen.py](gait_gen.py) | Frame codec (`make_frame`, `parse_frame`, `checksum`) plus a synthetic gait generator for hardware-free work. Also supplies `true_stances`, the ground truth the detector is scored against. |
 | [make_sessions.py](make_sessions.py) | Multi-session dataset generator. One file per (class, session), seeded per class, for session-disjoint train/test splits. |
 | [detector.py](detector.py) | Stance detection: `find_stances`, `merge_close`, `stance_report`, plus the `SENSOR_COLS` / `SENSOR_COORDS` definitions and the tuning constants. Single source for all of these. |
 | [heatmap.py](heatmap.py) | Foot-pressure field rendering and per-stance animation. |
 | [insole.ipynb](insole.ipynb) | Analysis pipeline: load, clean, window, stance detection, feature extraction, centre of pressure, plots. |
-| [test_stances.py](test_stances.py) | Detector tests: `true_stances` cadence scaling, `merge_close` behaviour, and a five-stream scorecard asserting detected-vs-truth counts. |
-| [sim/test_parse_frame.py](sim/test_parse_frame.py) | Parser test cases covering each rejection path in framespec.md section 8. |
+| `test_*.py`, [sim/test_parse_frame.py](sim/test_parse_frame.py) | Tests. Each runs directly (`python test_x.py`, PASS/FAIL lines, nonzero exit on failure) and under `python -m pytest`. See [Tests](#tests). |
 | [scripts/](scripts/) | Bench utilities: noise-baseline capture and per-channel noise statistics. |
 
 ## Hardware
@@ -57,11 +67,19 @@ each choice are in [framespec.md](framespec.md).
 
 ## Requirements
 
-Python 3.10 or newer.
+Python 3.10 or newer. From the repository root:
 
 ```
-pip install pyserial numpy pandas matplotlib
+pip install -e .                  # numpy, pandas; makes the modules importable anywhere
+pip install -e .[hw]              # + pyserial, bleak  (live capture)
+pip install -e .[analysis]        # + matplotlib, scipy, scikit-learn
+pip install -e .[test]            # + pytest
 ```
+
+[pyproject.toml](pyproject.toml) is the smallest thing that makes
+`import detector` work from any working directory: an editable install of the
+flat-layout modules, no `src/` or package directory. Without it, every script
+and test still works when run from the repository root.
 
 `pyserial` is required only for capture from hardware. The package installs as
 `pyserial` but imports as `serial`; `pip install serial` is a different,
@@ -113,38 +131,68 @@ python sim/test_parse_frame.py
 python test_stances.py
 ```
 
-Nine parser cases and fifteen detector assertions, both run from the repository
-root. Each prints `PASS` or `FAIL` and exits non-zero on any failure.
+Each prints `PASS` or `FAIL` per case and exits non-zero on any failure. The
+full set is listed under [Tests](#tests).
 
 ## Capture from hardware
 
-[read_serial.py](read_serial.py) is configured by the constants at the top of
-the file, not by command-line arguments:
-
-| Constant | Default | Meaning |
-| --- | --- | --- |
-| `PORT` | `COM12` | Serial port of the USB-UART bridge. |
-| `BAUD` | `115200` | Must match `Serial.begin()` in the firmware. |
-| `DURATION_S` | `60` | Capture window in seconds. `None` runs until interrupted. |
+[read_serial.py](read_serial.py) takes its transport and paths on the command
+line. The constants at the top of the file (`PORT = "COM7"`, `BAUD = 921600`,
+`DURATION_S = 60`, `BLE_NAME = "INSOLE"`) are defaults, and the two that vary
+between machines have flags:
 
 ```
-python read_serial.py
+python read_serial.py --source serial --port COM13 --duration 60 out.csv   # tethered USB
+python read_serial.py --source ble --duration 60 out.csv                   # Nordic UART over BLE
+python read_serial.py sim_walk.txt sim_walk.csv                            # replay a frame log
 ```
 
-Writes `readings.csv` with header `seq,ts_us,s0,s1,s2,s3,s4,s5`, then reports
-counters and exits:
+`--source` defaults to `file` when an input path is given and to `ble`
+otherwise. Output has the header `seq,ts_us,s0,s1,s2,s3,s4,s5`. At exit it
+prints one summary line:
 
 ```
-valid=6000 malformed=0 empty=0 bad_checksum=0 seq_breaks=0 timing_breaks=0
+source=serial valid=6000 malformed=0 empty=0 bad_checksum=0 seq_breaks=0 lost=0 loss=0.00% timing_breaks=0 status=0 source_drops=0 capture_s=60.0 device_s=60.0
 ```
 
-Exit status is non-zero if no frames were valid or if any anomaly counter is
-non-zero, so a capture can be used as a pass/fail gate in a bring-up script.
+and exits non-zero on any corrupted frame (every transport), on any lost frame
+over USB or file, on more than 2% loss over BLE, or when a **live source goes
+silent for 3 s** (`STALL_S`): a board that stops sending while the link stays
+up used to produce a clean, short file and exit 0, which is the mode that
+ruins a dataset. That watchdog prints `FAIL: stalled -- ...` and exits 1.
 
-`file_lines()` in the same module reads frames from a text file instead of the
-port, using the identical validation path. It is the seam for replaying a
-simulator capture or a saved raw log; nothing currently selects it, so using it
-means editing the `source` assignment.
+The three sources sit behind one seam, `make_source()`; everything after it
+consumes an iterator of strings. `infer_live.py` imports the same seam, so
+switching it between a file, USB and BLE is an argument, not an edit.
+
+## Streaming inference
+
+[infer_live.py](infer_live.py) runs the detector, the feature extractor and the
+persisted classifier on frames as they arrive:
+
+```
+python infer_live.py sim_walk.txt --label walk                # replay a frame log
+python infer_live.py data/real/walk02.csv --label walk        # replay a CSV capture
+python infer_live.py --source serial --port COM13 --duration 60
+python infer_live.py --source ble --duration 60 --out preds.csv
+```
+
+It prints one line per completed stance (span, features, predicted class) and,
+every 5 s regardless, the running counters: valid / bad frames, stances
+completed, **stances discarded for exceeding `MAX_DURATION`**, frames where the
+gain match is extrapolating (any sensor above `calibration.CAL_MAX_COUNTS`),
+and frames where s4 reads 0 (below its activation threshold, not missing). A
+per-stage `perf_counter` table is printed at exit. The exit code is
+`read_serial`'s, plus 1 on a stall.
+
+`test_infer_live.py` asserts that the streaming path produces features
+bit-identical to `features.extract_features` on the CSV `read_serial.py`
+writes from the same bytes, on every capture in the repository.
+
+The classifier (`model_lda.json`, from [fit_model.py](fit_model.py)) is fitted
+on **simulated** sessions. On real captures the recipe scores far below the
+majority floor, so its predictions on real gait are a plumbing check until a
+real training set exists.
 
 ### Noise baseline
 
@@ -172,7 +220,8 @@ saved file can run anywhere.
 Stages:
 
 1. **Load and clean.** Sessions load into one frame keyed by source path, with
-   `ts_us` reconstructed from the 100 Hz sample index. Readings outside the
+   `ts_us` as the firmware recorded it (an earlier version overwrote it with
+   the 100 Hz sample index, which hid timing jitter). Readings outside the
    valid 0-4095 ADC range are dropped and the count reported.
 2. **Window.** Fixed-length overlapping windows over the six channels.
 3. **Stance detection.** Hysteresis on total force across the six channels:
@@ -235,6 +284,27 @@ for raw hardware capture from [read_serial.py](read_serial.py). The notebook
 reads the `sim_*.csv` its bootstrap regenerates and writes features to
 `features_walk.csv`.
 
+## Tests
+
+```
+python -m pytest -q          # everything, from the repository root
+python test_stances.py       # or any one script, for its PASS/FAIL lines
+```
+
+| Script | Guards |
+| --- | --- |
+| [test_stances.py](test_stances.py) | Detector counts against `gait_gen.true_stances` on the five sim streams; `merge_close`. |
+| [test_geometry.py](test_geometry.py) | `SENSOR_COORDS` derived from `SENSOR_MM`; closed-form CoP answers; the documented all-zero `(nan, nan)`. |
+| [test_calibration.py](test_calibration.py) | Force fit recovery, flags, saturation, and that the gain match multiplies conductance, not counts. |
+| [test_capture_window.py](test_capture_window.py) | The capture window is anchored on the first line, not process start. |
+| [test_discriminant.py](test_discriminant.py) | LDA/QDA against sklearn; Wilson interval; weighted pooled covariance; the `n_k <= p` guard. |
+| [test_infer_live.py](test_infer_live.py) | Streaming == batch features on every capture; read boundaries; malformed frames; all-zero frames; `MAX_DURATION` discards; file/serial/BLE parity; no state leaks; the stall watchdog. |
+| [sim/test_parse_frame.py](sim/test_parse_frame.py) | The frame codec's rejection paths (framespec.md section 8). |
+
+Simulated data is not evidence about hardware: `gait_gen`'s constants, the
+detector thresholds and the tests over them were co-evolved, so any number
+measured on sim data is internally consistent by construction.
+
 ## Open items
 
 - `SENSOR_COORDS` now comes from measured positions, but the +/-15 mm spread
@@ -244,10 +314,17 @@ reads the `sim_*.csv` its bootstrap regenerates and writes features to
   framespec.md section 3. Assembly fixed which GPIO carries which channel; it
   did not establish that channel `sN` is the sensor measured at `SENSOR_MM[sN]`,
   and a swapped pair would move the CoP without changing any total force.
-- Stance thresholds `T_ON`, `T_OFF`, `MIN_DURATION`, `MAX_DURATION`, and
-  `GAP_MERGE` are tuned against simulated data and marked `RETUNE`. They need
-  re-tuning against a real capture and a real noise floor. Every stance count in
-  `test_stances.py` is a fixture of the simulator, not evidence about hardware.
+- `MAX_DURATION` was re-set to 200 frames from the real `_02` captures.
+  `T_ON`, `T_OFF`, `MIN_DURATION` and `GAP_MERGE` are still the
+  simulator-swept values and marked `RETUNE`; `T_OFF` is the next candidate
+  (shuffle's natural runs are longer than walk's, which reads as adjacent
+  contacts merging). Every stance count in `test_stances.py` is a fixture of
+  the simulator, not evidence about hardware.
+- The classifier is trained on simulated sessions only. Four minutes of real
+  data, one trial per class, is not a training set; a real one is the
+  prerequisite for any classifier claim.
+- The gain match is extrapolating on most loaded real frames: the highest
+  calibration sample was 824 counts and walking peaks reach ~1600-2000.
 - The simulator's gait model (sine-shaped load over fixed phase windows) is an
   assumption about foot loading, not a measurement. The detector currently only
   proves it works against that assumption.

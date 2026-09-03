@@ -1,8 +1,9 @@
 # data/real — first measured-position gait dataset
 
 Real-hardware captures from the **right-foot** insole. This is the first dataset
-collected against **physically measured** sensor positions (below), as opposed to
-the normalized placeholder geometry still in `detector.py`.
+collected against **physically measured** sensor positions (below). `detector.py`
+now derives `SENSOR_COORDS` from these measurements (commit 4e7d34f); the
+placeholder geometry it carried when this set was collected is gone.
 
 ## Hardware state
 
@@ -33,12 +34,11 @@ and the second — up to 10.0 — is the length axis.)
 
 Insole outline measured **10.8 × 3.6 in = 274 × 91 mm** (length × width).
 
-> **Correction needed elsewhere.** The top-level `README.md` and `detector.py`
-> still state the insole is **295 × 74 mm**. That figure is **wrong** — the
-> measured insole is **274 × 91 mm** (shorter, and considerably wider). Note also
-> that `SENSOR_COORDS` in `detector.py` is still the normalized placeholder
-> geometry, not these measured positions. Both should be corrected from this
-> dataset; that is out of scope for this commit and left as an open item.
+> **Corrected since.** When this set was collected, the top-level `README.md`
+> and `detector.py` stated the insole was **295 × 74 mm** and `SENSOR_COORDS`
+> was a normalized placeholder. Both were wrong; commit 4e7d34f set
+> `INSOLE_LEN_MM = 274`, `INSOLE_WIDTH_MM = 91` and derived `SENSOR_COORDS`
+> from the table above (`test_geometry.py` pins it).
 
 ### Measurement uncertainty
 
@@ -92,8 +92,27 @@ metatarsal head.
 these as missing data.
 
 Consequence: during those phases CoP is effectively a **5-sensor centroid** and
-carries a **lateral bias that varies by activity** — worst in **stand** and
-**shuffle**, least in **fast**.
+carries a **lateral bias that varies by activity**. Measured on this set by
+`analyze_real.py` C4/C4b (see `docs/sim_vs_real.md`), fraction of frames with
+s4 = 0 and the CoP displacement the zero is responsible for (common-substitute
+counterfactual):
+
+| activity | s4 = 0 frames | CoP bias (mm) |
+|---|---|---|
+| stand   | 99.12% | 8.58  |
+| fast    | 56.05% | 36.46 |
+| walk    | 52.02% | 33.55 |
+| shuffle | 46.38% | 36.70 |
+
+So among the three moving activities **fast is second worst**, and **shuffle
+has the lowest zero fraction**. An earlier version of this file said the bias
+was "worst in stand and shuffle, least in fast"; that was a guess made before
+the numbers were run and is wrong on both counts. Stand's zero fraction is the
+highest, but its bias in millimetres is the smallest because the other five
+sensors carry a nearly static load there.
+
+`infer_live.py` counts s4 = 0 frames live and prints the fraction beside every
+stance, so the bias is visible while a capture runs.
 
 ## Correlated single-frame dips
 
@@ -108,3 +127,17 @@ Treat it as an artifact, not real load.
 The gain corrections in **`gain_match.json`** apply to these captures. It is a
 **single-point (~12 N), relative gain match only — not absolute force**, and it is
 applied **in conductance space, not to raw counts**.
+
+The highest count any calibration sample reached is **824**
+(`calibration.CAL_MAX_COUNTS`, from `cal_data/`; the highest per-trial mean in
+the manifest is 809). Loaded frames in these captures sit above that on
+62–100% of frames per activity (`analyze_real.py` C3), so the gain match is
+extrapolating on most of this data. That is reported, not corrected.
+
+## Stance detection on this set
+
+With `MAX_DURATION = 120` (the simulator-derived value these captures were first
+run against) the detector discarded 17 of 35 walk contacts and 28 of 30 shuffle
+contacts outright, because real contacts here last 84–164 frames. It was raised
+to 200 on this evidence (`sweep_max_duration.py`); under that value every walk
+and shuffle contact is kept and standing still yields zero stances.

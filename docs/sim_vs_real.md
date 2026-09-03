@@ -4,6 +4,16 @@ Prompt 13, phases C–E. Everything below is measured on the four `_02` captures
 in `data/real/`, against `gait_gen.py` output, under the corrected 274 × 91 mm
 geometry.
 
+> **Superseded in part.** Sections C5, C6 and D2–D5 were measured with
+> `MAX_DURATION = 120`. Finding 1 below led to raising it to 200
+> (`detector.py`, `sweep_max_duration.py`); re-running `analyze_real.py` and
+> `sim_vs_real.py` regenerates every table that depends on it. The tables here
+> are kept as the record of *why* the change was made; do not quote them as
+> current. Two figures in this document were also found to be unsupported and
+> are corrected in place below with a note: the `~940` calibration ceiling
+> (C3, B4) and the `data/real/README.md` s4 ordering (finding 2, now fixed in
+> that file).
+
 ## Provenance
 
 Every number in this document is printed by one of two scripts. Nothing was
@@ -109,21 +119,28 @@ PASS  result is nowhere near raw-count scaling (correction * counts)  conductanc
 ## C3 — Extrapolation (honesty check)
 
 The gain match was derived at a single ~12 N point, and the highest count any
-calibration trial reached was ~940. Percentage of frames whose count exceeds
-that ceiling, i.e. where the gain match is extrapolating past everything it was
-ever sampled at:
+calibration sample reached was **824** (`calibration.CAL_MAX_COUNTS`, from
+`cal_data/`; the highest per-trial mean in the manifest is 809). Percentage of
+frames whose count exceeds that ceiling, i.e. where the gain match is
+extrapolating past everything it was ever sampled at:
 
 | activity | s0 | s1 | s2 | s3 | s4 | s5 | any sensor |
 |---|---|---|---|---|---|---|---|
-| stand   | 89.28% | 94.97% | **100.00%** | 92.70% | 0.00% | 0.00% | **100.00%** |
-| walk    | 29.67% | 23.98% | 40.33% | 40.78% | 16.78% | 28.00% | 65.17% |
-| fast    | 28.57% | 21.30% | 32.00% | 35.13% | 19.98% | 28.37% | 61.48% |
-| shuffle | 35.00% | 25.82% | 44.20% | 43.28% | 3.42% | 16.05% | 58.55% |
+| stand   | 99.37% | 94.98% | **100.00%** | **100.00%** | 0.00% | 0.00% | **100.00%** |
+| walk    | 34.23% | 24.82% | 45.25% | 46.17% | 19.63% | 33.85% | 66.58% |
+| fast    | 30.75% | 21.97% | 37.90% | 40.30% | 22.27% | 31.53% | 62.45% |
+| shuffle | 40.37% | 28.98% | 48.72% | 50.10% | 5.90% | 23.58% | 61.97% |
 
-Between **58.55% and 100%** of frames in every capture contain at least one
+Between **61.97% and 100%** of frames in every capture contain at least one
 sensor outside the calibrated range. For standing it is every single frame, and
-s2 is above the ceiling 100% of the time. Reported, not fixed: no correction is
-applied and no frame is dropped on this basis.
+s2 and s3 are above the ceiling 100% of the time. Reported, not fixed: no
+correction is applied and no frame is dropped on this basis.
+
+> **Corrected.** This section originally used a ceiling of
+> "~940 counts" and reported 58.55–100%. Nothing in `cal_data/` reaches 940:
+> the highest raw sample is 824 (`cal_s5_t3.csv`) and the highest per-trial
+> mean is 809.11. The table above is the regenerated one
+> (`test_infer_live.py` recomputes the constant from `cal_data/`).
 
 ## C4 — Zeros are below-threshold, not missing
 
@@ -524,7 +541,7 @@ before collection: `MAX_DURATION` was set to 120 because the longest *simulated*
 stance was 58 frames, and nothing in the simulator suggested real contacts would
 land within one frame of the limit.
 
-### 2. The documented s4 bias ordering is wrong — **SUPPORTED**
+### 2. The documented s4 bias ordering is wrong — **SUPPORTED** (since fixed)
 
 `data/real/README.md` states the s4 lateral bias is "worst in stand and shuffle,
 least in fast", but measured zero fractions are stand 99.12%, fast 56.05%, walk
@@ -556,6 +573,8 @@ dataset **cannot** settle are marked and grouped at the end.
 ### A. Parameter retunes
 
 **A1. Raise `MAX_DURATION` from 120 frames to ~200, or make it activity-aware.**
+**Done: `MAX_DURATION = 200`.** The sweep is `sweep_max_duration.py`; walk
+went 18 → 35 kept, shuffle 2 → 30, fast and stand unchanged.
 Motivated by C5: 17/35 walk and 28/30 shuffle runs exceed 120 frames, natural
 maxima are 144 (walk) and 164 (shuffle). Expected effect: walk detections rise
 from 18 toward ~35 and shuffle from 2 toward ~30, and the selection bias in the
@@ -608,7 +627,7 @@ carried forward from prior work rather than established here.
 evidence; `_02` shows no such failure in 6000 frames × 4 captures. **Confidence:
 high** that the fix worked, on 4 minutes of data.
 
-**B4. Calibrate above 940 counts.** Motivated by C3: 58.6–100% of real frames
+**B4. Calibrate above 824 counts.** Motivated by C3: 62–100% of real frames
 sit above the highest count any calibration trial reached, and 100% of standing
 frames do. Expected effect: the gain match stops extrapolating on the majority
 of real data. **Confidence: high** on the need; the current single-point ~12 N
@@ -636,7 +655,7 @@ caveat.** Motivated by the C5 selection table: walk's surviving stances have a
 kept median of 112.5 frames against a natural median of 119, and shuffle's two
 survivors sit 58.03 s apart. Any mean over them is a mean over the short tail.
 Expected effect: correctness of reporting, not of computation. **Confidence:
-high.** This resolves itself once A1 lands.
+high.** This resolves itself once A1 lands — it has.
 
 ### What this data cannot settle
 
