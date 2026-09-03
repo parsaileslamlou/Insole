@@ -9,6 +9,30 @@ Failure taxonomy used in the comments below:
   annihilation   - one true event becomes 0 detections   (1 FN, precision looks clean)
   merging        - N true events become 1 detection      (N-1 FN)
   boundary error - 1 detection, wrong edges              (invisible to P/R)
+
+Geometry, and what is authoritative about it:
+
+  The authoritative insole boundary is the 274 x 91 mm RECTANGLE defined by
+  INSOLE_LEN_MM and INSOLE_WIDTH_MM below. Every sensor coordinate is measured
+  against that rectangle and normalised by its length.
+
+  heatmap.FOOT_OUTLINE is NOT authoritative. It is a hand-drawn, decorative
+  foot silhouette -- a rendering aid, digitised in arbitrary units and merely
+  rescaled onto the rectangle's bounding box. It was never measured against
+  this insole and carries no calibration.
+
+  That distinction has a consequence, because heatmap.FOOT_MASK is derived
+  from the silhouette rather than from the rectangle: the drawn foot pinches
+  in where a real foot narrows, so a sensor sitting near the rectangle's edge
+  can fall close to (or outside) the silhouette even though it is squarely on
+  the insole. Its interpolated field is then clipped in the render. That is a
+  cosmetic artifact of the drawing, not a statement about the sensor. s3, at
+  81.3 of 91 mm across the width, is the sensor this applies to -- it clears
+  the outline by roughly 7 mm, which is inside the +/-15 mm measurement
+  uncertainty on its own position.
+
+  Nothing in the CoP path consults FOOT_OUTLINE. cop_frame uses SENSOR_COORDS
+  only, so a clipped render never changes a computed number.
 """
 
 SENSOR_COLS = ["s0", "s1", "s2", "s3", "s4", "s5"]
