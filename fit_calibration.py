@@ -402,7 +402,7 @@ def derive_gain_match(manifest_path="calibration_manifest.csv", fs=FS_COUNTS):
     """Derive per-channel relative gain corrections from the manifest.
 
     Returns the full gain_match.json document (a dict) with the corrections and
-    the provenance needed to defend them: the FS_COUNTS used, the six rows the
+    the record needed to defend them: the FS_COUNTS used, the six rows the
     fit consumed as (sensor, trial, force_n, count_mean, rest_min), the selection
     criteria, and a method string naming this a single-point relative gain match.
     Writes nothing.

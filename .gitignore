@@ -46,3 +46,11 @@ env/
 
 # setuptools editable-install metadata (pip install -e .)
 *.egg-info/
+
+# Local tooling and notes. None of these belong in the repository.
+CLAUDE.md
+.claude/
+.cursor*
+.aider*
+.pytest_cache/
+build/

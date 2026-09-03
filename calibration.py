@@ -379,7 +379,7 @@ GAIN_MATCH_KIND = "relative_gain_match"
 def load_gain_match(path="gain_match.json"):
     """Read a relative-gain-match gain_match.json.
 
-    Written by fit_calibration.derive_gain_match. The relative gain match lives
+    Produced by fit_calibration.derive_gain_match. The relative gain match lives
     in its OWN file, separate from the legacy absolute fit in calibration.json,
     so the two documents -- different schemas entirely -- can never overwrite or
     be mistaken for one another. Correction keys come back as ints (JSON stores

@@ -208,7 +208,7 @@ def save_model(model, path, meta=None):
 
 
 def load_model(path):
-    """Read a model written by save_model. Returns the model dict plus "meta"."""
+    """Read a model saved by save_model. Returns the model dict plus "meta"."""
     with open(path, "r") as f:
         doc = json.load(f)
     if doc.get("kind") not in ("lda", "qda"):

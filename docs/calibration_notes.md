@@ -78,7 +78,7 @@ ratio between channels measured under the same conditions.
 The 40+ rows in `cal_data/calibration_manifest.csv` are that drift-characterization
 dataset. They are kept as evidence and must not be rewritten or trimmed.
 
-## Timestamps and data provenance
+## Timestamps are measured, not synthesized
 
 The frames in `cal_data/cal_s*_t*.csv` are **live bench captures**, not synthetic.
 The `ts_us` column is a real `esp_timer_get_time()` read: the firmware runs an

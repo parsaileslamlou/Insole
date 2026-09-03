@@ -14,7 +14,7 @@ geometry.
 > (C3, B4) and the `data/real/README.md` s4 ordering (finding 2, now fixed in
 > that file).
 
-## Provenance
+## Regeneration
 
 Every number in this document is printed by one of two scripts. Nothing was
 transcribed by hand from a session that cannot be re-run.
