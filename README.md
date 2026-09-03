@@ -12,7 +12,8 @@ first non-circular test of everything the simulator was tuned against.
 **Start here:** [notebooks/demo.ipynb](notebooks/demo.ipynb) runs the whole
 pipeline without hardware, spec to heatmap, in a few seconds, with the real
 captures beside the simulated ones; its outputs are committed so it reads on
-GitHub. [docs/writeup.md](docs/writeup.md) is the project in 600 words.
+GitHub. [docs/writeup.md](docs/writeup.md) is the project in 600 words, and
+`./run_demo.sh` runs generate → log → predict on the simulator in one command.
 
 ## Data path
 
@@ -55,13 +56,14 @@ GitHub. [docs/writeup.md](docs/writeup.md) is the project in 600 words.
 | [scripts/](scripts/) | Programs that are run, never imported: `train_real.py` (the real-data classifier and its analysis), `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`. |
 | [tests/](tests/) | Every test. Each runs directly (PASS/FAIL lines, nonzero exit on failure) and under pytest. |
 | [notebooks/](notebooks/) | [demo.ipynb](notebooks/demo.ipynb), the run-all demonstration (start here); [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
-| [docs/](docs/) | [writeup.md](docs/writeup.md) (the project in 600 words), [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
+| [docs/](docs/) | [writeup.md](docs/writeup.md) (the project in 600 words), [hardware_notes.md](docs/hardware_notes.md) (board, bench, failure modes, what the live bench must show), [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
 | [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (trained on the real captures). |
 | [data/real/](data/real/) | Four real captures, `_02` set (training/evaluation) and `_01` set (failure evidence). Read its README first. |
 | [data/sim/](data/sim/) | The five committed simulator fixtures `sim_*.txt`; generated CSVs and sessions land here too and are ignored. |
 | [cal_data/](cal_data/) | 42 bench calibration captures and their manifest. |
 | [figures/](figures/) | Rendered comparison figures. |
 | [firmware/insole/](firmware/insole/) | The Arduino sketch and its header. |
+| [run_demo.sh](run_demo.sh) | The simulator demo in one command; prints `DEMO OK` or exits nonzero. |
 
 Two invocation forms, used consistently everywhere: package programs run as
 `python -m insole.<module>`, scripts run as `python scripts/<name>.py`. Both
@@ -122,6 +124,16 @@ pip install -e ".[analysis,test,notebook]"
    python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (293 across the nine files)
    ```
 
+6. Or do steps 1–3 in one command, deterministic, leaving nothing behind
+   (bash; on Windows use Git Bash; `PYTHON=.venv/bin/python` if `python` is
+   not the venv's):
+
+   ```
+   ./run_demo.sh
+   ...
+   DEMO OK: 60 stances on a 60 s simulated walk, predictions fast=6  walk=54, 60 rows written
+   ```
+
 Both notebooks run from a fresh clone: `jupyter nbconvert --to notebook
 --execute notebooks/demo.ipynb` (or `insole.ipynb`) from the repository root,
 or open one in Colab (the first cell clones and installs). **Colab caveat:** a
@@ -150,10 +162,13 @@ Always start from a fresh session.
 | 16 | Repository consolidation, this README | package layout | done |
 | 17 | Demo notebook | [notebooks/demo.ipynb](notebooks/demo.ipynb), `figures/demo/` | done |
 | 18 | Writeup | [docs/writeup.md](docs/writeup.md) | done |
-| 19 | Final pass, `run_demo.sh`, hardware notes | | pending |
+| 19 | Final pass, `run_demo.sh`, hardware notes | [run_demo.sh](run_demo.sh), [docs/hardware_notes.md](docs/hardware_notes.md) | done |
 | 20 | Classifier trained on the real captures | `scripts/train_real.py`, [docs/real_results.md](docs/real_results.md) | done; a per-session split is not possible with one session per class, so the headline is time-blocked within session |
 
 ## Hardware
+
+Bench detail, failure modes and every measurement that is not in a script
+are in [docs/hardware_notes.md](docs/hardware_notes.md).
 
 **Board.** ESP32-S3-DevKitC-1 (WROOM-1), Arduino-ESP32 core. The sketch folder
 name equals the sketch name (`firmware/insole/insole.ino`). In the Arduino IDE

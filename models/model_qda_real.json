@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_utc": "2026-09-03T09:35:27Z",
+  "created_utc": "2026-09-03T09:45:42Z",
   "kind": "qda",
   "classes": [
     "fast",
@@ -134,7 +134,7 @@
       "MAX_DURATION": 200,
       "GAP_MERGE": 12
     },
-    "git_hash": "a7a803b",
+    "git_hash": "143218b",
     "fit_script": "scripts/train_real.py"
   }
 }

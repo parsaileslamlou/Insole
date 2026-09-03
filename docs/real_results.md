@@ -1,6 +1,6 @@
 # Real-data results
 
-Every number in this file is written by `python scripts/train_real.py` (git a7a803b); regenerate it, do not edit it. Figures: `figures/real_results/`. Models: `models/model_lda_real.json`, `models/model_qda_real.json`.
+Every number in this file is produced by `python scripts/train_real.py`; regenerate it, do not edit it (the persisted models' meta records the git hash of the run). Figures: `figures/real_results/`. Models: `models/model_lda_real.json`, `models/model_qda_real.json`.
 
 ## 1. Data
 

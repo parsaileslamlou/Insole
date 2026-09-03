@@ -623,8 +623,9 @@ def main(argv=None):
     L = LETTER
     out("# Real-data results")
     out()
-    out("Every number in this file is written by `python scripts/train_real.py` "
-        f"(git {git_hash()}); regenerate it, do not edit it. Figures: "
+    out("Every number in this file is produced by `python scripts/train_real.py`; "
+        "regenerate it, do not edit it (the persisted models' meta records the git hash of "
+        "the run). Figures: "
         f"`{os.path.relpath(args.fig_dir, REPO)}/`. Models: "
         + ", ".join(f"`{p}`" for p in saved.values()) + ".")
     out()
