@@ -16,7 +16,7 @@ sensor geometry -- they are imported, never redefined.
 import numpy as np
 import pandas as pd
 
-from detector import (
+from insole.detector import (
     SENSOR_COLS, SENSOR_COORDS,
     find_stances, merge_close,
 )

@@ -1,7 +1,7 @@
 # Serial Frame Specification
 
 **Version:** 1.0
-**Applies to:** ESP32-S3 firmware, host logger (`host/read_serial.py`), gait simulator (`sim/gait_gen.py`)
+**Applies to:** ESP32-S3 firmware, host logger (`insole/read_serial.py`), gait simulator (`insole/gait_gen.py`)
 
 ## 1. Scope
 

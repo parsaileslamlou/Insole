@@ -1,6 +1,6 @@
 """Regression tests for the capture window anchor. Run from the repo root:
 
-    python3 test_capture_window.py
+    python tests/test_capture_window.py
 
 Stdlib only, and no hardware: no board, no radio, no serial port, and no real
 clock. The clock and the line source are both fakes, so the whole 600-frame
@@ -51,7 +51,7 @@ import os
 import sys
 import tempfile
 
-import read_serial
+from insole import read_serial
 
 
 PERIOD_US = read_serial.PERIOD_US       # 10000, i.e. 100 Hz

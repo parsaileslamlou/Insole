@@ -1,6 +1,6 @@
 # Calibration notes
 
-What is shipped in `gain_match.json` is a **single-point relative gain match**
+What is shipped in `models/gain_match.json` is a **single-point relative gain match**
 across the six FSR channels. It is **not** an absolute force calibration, and
 nothing downstream may treat it as one. It is kept in its own file, separate
 from the legacy absolute fit's `calibration.json`, so the two documents -- which
@@ -18,7 +18,7 @@ derive a per-channel gain that brings every channel onto a common scale. Because
 all six were measured at the same force with the same recovery state, the FSR
 drift (below) is common to all of them and **cancels in the channel-to-channel
 ratio**. What survives is the relative gain between channels, and that is all
-`gain_match.json` claims.
+`models/gain_match.json` claims.
 
 **Not measured.** An absolute counts -> newtons mapping. We have no bench-stable
 per-channel force curve: the sensors relax too fast under sustained load (below)
@@ -105,12 +105,12 @@ count is ever measured and differs from 4095, the gain match **must be
 re-derived** from the manifest against the corrected value. Re-run:
 
 ```
-python3 fit_calibration.py cal_data/calibration_manifest.csv --fs <measured>
+python -m insole.fit_calibration cal_data/calibration_manifest.csv -o models/gain_match.json --fs <measured>
 ```
 
 ## No transfer across hardware revisions
 
 This calibration is specific to the sensors, divider, and board it was taken on.
 It does **not** transfer across hardware revisions. After the PCB spin the whole
-match must be re-captured and re-derived; do not carry `gain_match.json`
+match must be re-captured and re-derived; do not carry `models/gain_match.json`
 forward across a hardware change.

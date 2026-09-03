@@ -4,14 +4,14 @@ The DEFAULT action is the single-point RELATIVE gain match across the six
 channels (the calibration we ship), read from the manifest and written to its
 own file, gain_match.json -- never calibration.json:
 
-    python3 fit_calibration.py                             # cwd manifest -> gain_match.json
-    python3 fit_calibration.py cal_data/calibration_manifest.csv -o gain_match.json
+    python -m insole.fit_calibration                       # cal_data manifest -> models/gain_match.json
+    python -m insole.fit_calibration cal_data/calibration_manifest.csv -o models/gain_match.json
 
 The legacy multi-point ABSOLUTE fit -- infeasible under FSR drift, see
 docs/calibration_notes.md -- fits all six sensors from a directory of bench
 captures to calibration.json and stays reachable under `legacy-fit`:
 
-    python3 fit_calibration.py legacy-fit caldata -o calibration.json -p residuals.png
+    python -m insole.fit_calibration legacy-fit caldata -o calibration.json -p residuals.png
 
 Input to the legacy fit is the set of files capture_calibration.py used to write:
 
@@ -44,7 +44,8 @@ import re
 import sys
 import time
 
-from calibration import (
+from insole.paths import CAL_DATA, MODELS
+from insole.calibration import (
     FS_COUNTS, conductance, fit_sensor, is_saturated, missing_fit, save_calibration,
     N_SENSORS, FLAG_OK, FLAG_NO_DATA,
 )
@@ -492,11 +493,11 @@ def main_gain_match(argv=None):
                     "from the legacy absolute fit's calibration.json). This is a "
                     "single-point RELATIVE gain match across the six channels, "
                     "NOT an absolute force calibration.")
-    p.add_argument("manifest", nargs="?", default="calibration_manifest.csv",
+    p.add_argument("manifest", nargs="?", default=str(CAL_DATA / "calibration_manifest.csv"),
                    help="path to calibration_manifest.csv "
-                        "(default: ./calibration_manifest.csv)")
-    p.add_argument("-o", "--out", default="gain_match.json",
-                   help="output JSON (default: gain_match.json)")
+                        "(default: cal_data/calibration_manifest.csv)")
+    p.add_argument("-o", "--out", default=str(MODELS / "gain_match.json"),
+                   help="output JSON (default: models/gain_match.json)")
     p.add_argument("--fs", type=float, default=FS_COUNTS,
                    help=f"saturation count (default: {FS_COUNTS}, a PLACEHOLDER; "
                         f"the corrections are FS-dependent, re-derive if it moves)")

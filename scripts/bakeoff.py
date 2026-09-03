@@ -38,16 +38,17 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from discriminant import (
+from insole.discriminant import (
     fit_lda, fit_qda, predict, accuracy_ci,
     _log_discriminants, IllConditionedCovarianceWarning, RANK_TOL,
 )
-from features import SENSOR_COLS, find_stances, merge_close, extract_features
-from make_sessions import CLASSES, SESSIONS_PER_CLASS, session_name
+from insole.features import SENSOR_COLS, find_stances, merge_close, extract_features
+from insole.make_sessions import CLASSES, SESSIONS_PER_CLASS, session_name
+from insole.paths import DATA_SIM, REPO
 
 FEATURES = ["cop_path_len", "cop_displacement"]
 TEST_SESSION_IDX = 3            # hold out the last session of every class
-FRAME_CSV = "features_sessions.csv"
+FRAME_CSV = str(DATA_SIM / "features_sessions.csv")
 
 # Figures carried over from an earlier session, to be confirmed or corrected
 # out loud rather than silently replaced.
@@ -69,18 +70,19 @@ def build_frame():
     frames = []
     for label in CLASSES:
         for i in range(SESSIONS_PER_CLASS):
-            stem = session_name(label, i)[:-4]
+            name = session_name(label, i)[:-4]
+            stem = os.path.join(DATA_SIM, name)
             if not os.path.exists(stem + ".csv"):
                 if not os.path.exists(stem + ".txt"):
-                    subprocess.run([sys.executable, "make_sessions.py"],
-                                   check=True, stdout=subprocess.DEVNULL)
-                subprocess.run([sys.executable, "read_serial.py",
+                    subprocess.run([sys.executable, "-m", "insole.make_sessions"],
+                                   check=True, cwd=REPO, stdout=subprocess.DEVNULL)
+                subprocess.run([sys.executable, "-m", "insole.read_serial",
                                 stem + ".txt", stem + ".csv"],
-                               check=True, stdout=subprocess.DEVNULL)
+                               check=True, cwd=REPO, stdout=subprocess.DEVNULL)
             df = pd.read_csv(stem + ".csv")
             total = df[SENSOR_COLS].sum(axis=1).to_numpy()
             feats = extract_features(df, merge_close(find_stances(total)), label)
-            feats["session"] = stem
+            feats["session"] = name
             frames.append(feats)
     out = pd.concat(frames, ignore_index=True)
     out.to_csv(FRAME_CSV, index=False)
@@ -90,10 +92,10 @@ def build_frame():
 head("DATA")
 if os.path.exists(FRAME_CSV):
     frame = pd.read_csv(FRAME_CSV)
-    print("loaded " + FRAME_CSV + " (built by features.py)")
+    print("loaded " + os.path.relpath(FRAME_CSV, REPO) + " (built by features.py)")
 else:
     frame = build_frame()
-    print("rebuilt " + FRAME_CSV + " via features.py + read_serial.py CLI")
+    print("rebuilt " + os.path.relpath(FRAME_CSV, REPO) + " via features.py + read_serial CLI")
 
 n_rows = len(frame)
 n_sessions = frame["session"].nunique()

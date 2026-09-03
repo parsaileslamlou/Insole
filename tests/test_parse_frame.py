@@ -1,9 +1,11 @@
-import os
+"""The frame codec's rejection paths (docs/frame_spec.md section 8). Run:
+
+    python tests/test_parse_frame.py
+"""
+
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from gait_gen import parse_frame, make_frame
+from insole.gait_gen import parse_frame, make_frame
 
 OK_FIELDS = [41, 152300, 2048, 1900, 300, 150, 2200, 3000]
 

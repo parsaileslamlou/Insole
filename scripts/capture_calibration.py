@@ -1,8 +1,8 @@
 """capture_calibration.py — interactive scale-referenced bench capture.
 
-    python3 capture_calibration.py --source serial          # live bench session
-    python3 capture_calibration.py sim_walk.txt             # rehearse via file
-    python3 capture_calibration.py --source ble --dwell 3   # longer dwell
+    python scripts/capture_calibration.py --source serial          # live bench session
+    python scripts/capture_calibration.py data/sim/sim_walk.txt             # rehearse via file
+    python scripts/capture_calibration.py --source ble --dwell 3   # longer dwell
 
 One trial per press. Unlike the old known-mass sweep, the applied force is NOT
 known in advance: you press the indentor on a sensor, the load lands on a
@@ -32,8 +32,8 @@ import statistics
 import sys
 import time
 
-import read_serial as RS
-from calibration import FS_COUNTS
+from insole import read_serial as RS
+from insole.calibration import FS_COUNTS
 
 SAMPLE_HZ = 100                 # must match firmware
 DEFAULT_DWELL = 2.0             # seconds captured per press; --dwell overrides
@@ -374,7 +374,7 @@ def main(argv=None):
         print()
 
     print(f"session over, {kept} trial(s) kept in {args.dir}")
-    print(f"next: python3 fit_calibration.py {args.dir}")
+    print(f"next: python -m insole.fit_calibration {os.path.join(args.dir, MANIFEST)} -o models/gain_match.json")
     return 0
 
 

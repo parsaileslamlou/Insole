@@ -1,6 +1,7 @@
 # Recorded sensor data — keep raw CSVs out of git unless you deliberately commit one
-# data/* rather than data/ so a specific subpath (data/real/) can be re-included
-# below -- a bare directory exclusion cannot be overridden by a file negation.
+# data/* rather than data/ so specific subpaths (data/real/, data/sim/) can be
+# re-included below -- a bare directory exclusion cannot be overridden by a file
+# negation.
 data/*
 *.csv
 
@@ -18,13 +19,20 @@ data/*
 !data/real/*.csv
 data/real/check_all.csv
 
-# Generated gait streams. make_sessions.py writes sim_<label>_<NN>.txt from a
-# fixed per-class seed, so they rebuild byte-identical and do not belong in git.
-sim_*_[0-9][0-9].txt
-# The five unnumbered sim_*.txt from gait_gen.py are deliberately NOT ignored:
-# they are committed regression fixtures, and the notebook's Colab bootstrap
-# rebuilds every sim_*.csv from them after a fresh clone. Ignoring them would
-# leave a clone with no streams to read.
+# ...and data/sim/: the five unnumbered sim_*.txt from gait_gen.py are committed
+# regression fixtures. tests/test_stances.py scores against them and the
+# notebook's Colab bootstrap rebuilds every sim_*.csv from them after a fresh
+# clone; ignoring them would leave a clone with nothing to rebuild from.
+# Everything else in there is generated and rebuilds byte-identical or is
+# derived: sim_*.csv, the seeded sim_<label>_<NN>.txt sessions from
+# make_sessions.py, and features_sessions.csv from scripts/bakeoff.py.
+!data/sim/
+data/sim/*
+!data/sim/sim_walk.txt
+!data/sim/sim_fast.txt
+!data/sim/sim_shuffle.txt
+!data/sim/sim_dropout.txt
+!data/sim/sim_stand.txt
 
 # Jupyter
 .ipynb_checkpoints/
@@ -37,6 +45,9 @@ __pycache__/
 .venv/
 venv/
 env/
+build/
+*.egg-info/
+.pytest_cache/
 
 # VS Code
 .vscode/
@@ -44,13 +55,11 @@ env/
 # macOS
 .DS_Store
 
-# setuptools editable-install metadata (pip install -e .)
-*.egg-info/
-
 # Local tooling and notes. None of these belong in the repository.
 CLAUDE.md
 .claude/
 .cursor*
 .aider*
-.pytest_cache/
-build/
+
+# The analysis notebook writes its stance animation to the cwd (repo root).
+/stance.gif

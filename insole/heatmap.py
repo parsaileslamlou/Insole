@@ -5,7 +5,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # Single source of truth: these used to be repeated here, in the notebook and
 # in detector.py. Editing one copy and not the others silently moved the CoP.
-from detector import (
+from insole.detector import (
     SENSOR_COLS, SENSOR_COORDS, INSOLE_LEN_MM, INSOLE_WIDTH_MM,
 )
 

@@ -1,6 +1,6 @@
 """Regression tests for stance detection. Run from the repo root:
 
-    python test_stances.py
+    python tests/test_stances.py
 
 One case per simulated stream, each guarding a named failure bucket.
 Ground truth always comes from gait_gen.true_stances, never from the
@@ -18,10 +18,12 @@ import sys
 
 import pandas as pd
 
-import detector as D
-from gait_gen import SHUFFLE_CYCLE_S, true_stances
+from insole import detector as D
+from insole.gait_gen import SHUFFLE_CYCLE_S, true_stances
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+from insole.paths import DATA_REAL, DATA_SIM, REPO as _REPO
+
+REPO = str(_REPO)
 
 # stream, gait_gen mode for truth, cycle_s for truth, the failure it guards
 CASES = [
@@ -35,13 +37,13 @@ CASES = [
 
 def ensure_csv(stem):
     """Sim CSVs are gitignored, so rebuild them from the committed .txt streams."""
-    csv_path = os.path.join(REPO, stem + ".csv")
-    txt_path = os.path.join(REPO, stem + ".txt")
+    csv_path = os.path.join(DATA_SIM, stem + ".csv")
+    txt_path = os.path.join(DATA_SIM, stem + ".txt")
     if os.path.exists(csv_path):
         return csv_path
     if not os.path.exists(txt_path):
-        raise SystemExit(f"missing {txt_path} -- run: python gait_gen.py")
-    subprocess.run([sys.executable, os.path.join(REPO, "read_serial.py"),
+        raise SystemExit(f"missing {txt_path} -- the fixture is committed under data/sim/")
+    subprocess.run([sys.executable, "-m", "insole.read_serial",
                     txt_path, csv_path], check=True, cwd=REPO)
     return csv_path
 
@@ -107,7 +109,7 @@ def test_merge_close():
     return passed, failed
 
 
-REAL = os.path.join(REPO, "data", "real")
+REAL = str(DATA_REAL)
 # (as-captured filename, stances after find_stances + merge_close)
 REAL_COUNTS = [("stand_02.csv", 0), ("walk02.csv", 35),
                ("fast02.csv", 48), ("shuffle02.csv", 30)]

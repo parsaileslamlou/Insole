@@ -42,6 +42,8 @@ import json
 import math
 import time
 
+from insole.paths import MODELS
+
 __all__ = [
     "FS_COUNTS", "G_MPS2", "CAL_MAX_COUNTS",
     "conductance", "grams_to_newtons", "is_saturated",
@@ -374,9 +376,10 @@ def load_calibration(path):
 
 
 GAIN_MATCH_KIND = "relative_gain_match"
+GAIN_MATCH_PATH = str(MODELS / "gain_match.json")   # the shipped match
 
 
-def load_gain_match(path="gain_match.json"):
+def load_gain_match(path=GAIN_MATCH_PATH):
     """Read a relative-gain-match gain_match.json.
 
     Produced by fit_calibration.derive_gain_match. The relative gain match lives

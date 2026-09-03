@@ -1,6 +1,6 @@
 """Regression tests for sensor geometry and centre of pressure. Run:
 
-    python test_geometry.py
+    python tests/test_geometry.py
 
 CoP is a weighted mean, so it has closed-form answers that do not depend on
 the detector, on any capture, or on the simulator. Those answers are what this
@@ -23,8 +23,8 @@ import sys
 
 import numpy as np
 
-import detector as D
-from features import cop_frame, cop_features
+from insole import detector as D
+from insole.features import cop_frame, cop_features
 
 # Expected coordinates, rebuilt from the raw millimetre table rather than read
 # back out of SENSOR_COORDS. Comparing SENSOR_COORDS against itself would pass

@@ -12,12 +12,12 @@ of strings and does not know or care where they came from.
     pip install pyserial bleak
 
 Usage:
-    read_serial.py                          live BLE  -> readings.csv
-    read_serial.py --source ble    out.csv  live BLE  -> out.csv
-    read_serial.py --source serial out.csv  live USB  -> out.csv
-    read_serial.py --source serial --port COM13 --duration 30 out.csv
-    read_serial.py in.txt out.csv           replay a saved capture
-    read_serial.py --source file in.txt out.csv
+    python -m insole.read_serial                          live BLE  -> readings.csv
+    python -m insole.read_serial --source ble    out.csv  live BLE  -> out.csv
+    python -m insole.read_serial --source serial out.csv  live USB  -> out.csv
+    python -m insole.read_serial --source serial --port COM13 --duration 30 out.csv
+    python -m insole.read_serial in.txt out.csv           replay a saved capture
+    python -m insole.read_serial --source file in.txt out.csv
 
 --port and --duration override PORT and DURATION_S for one run, so a machine
 whose board enumerates on a different COM port needs no local edit to this
@@ -25,7 +25,8 @@ file.
 
 Both paths are optional. --source defaults to "file" when an input path is
 given and "ble" otherwise, so the notebook's
-`read_serial.py sim_walk.txt sim_walk.csv` works with no flags.
+`python -m insole.read_serial data/sim/sim_walk.txt data/sim/sim_walk.csv`
+works with no flags.
 
 A live source has no input path, so its single positional is the OUTPUT --
 that is what lets compare_captures.py run two captures side by side. --source

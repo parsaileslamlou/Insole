@@ -1,7 +1,7 @@
 """Fault-injection tests: gait_gen's three fault modes through the logger
 (read_serial.main) and the streamer (infer_live.main). Run from the repo root:
 
-    python test_faults.py
+    python tests/test_faults.py
 
 Also collected by pytest. No hardware: the live source is replaced by a fake
 yielding the same lines a file would, as test_infer_live.py does.
@@ -49,13 +49,15 @@ import types
 
 import pandas as pd
 
-import detector as D
-import gait_gen as G
-import infer_live as IL
-import read_serial as RS
-from make_sessions import CLASSES, JITTER, SEED_BASE, SESSIONS_PER_CLASS, session_name
+from insole import detector as D
+from insole import gait_gen as G
+from insole import infer_live as IL
+from insole import read_serial as RS
+from insole.make_sessions import CLASSES, JITTER, SEED_BASE, SESSIONS_PER_CLASS, session_name
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+from insole.paths import REPO as _REPO
+
+REPO = str(_REPO)
 N_FRAMES = G.DURATION_S * G.SAMPLE_HZ            # frames the board emits in 60 s
 KEYS = ("valid", "malformed", "empty", "bad_checksum", "seq_breaks", "lost",
         "timing_breaks", "resets", "status")
@@ -419,14 +421,14 @@ def test_logger_streamer_consistency():
 
 
 # ---------------------------------------------------------------------------
-# 6. The CLI: python gait_gen.py --out ... with the fault flags
+# 6. The CLI: python -m insole.gait_gen --out ... with the fault flags
 # ---------------------------------------------------------------------------
 def test_cli():
     t = Tally()
     py = sys.executable
     with tempfile.TemporaryDirectory() as tmp:
         txt, csvp = os.path.join(tmp, "cli.txt"), os.path.join(tmp, "cli.csv")
-        r = subprocess.run([py, os.path.join(REPO, "gait_gen.py"), "--out", txt,
+        r = subprocess.run([py, "-m", "insole.gait_gen", "--out", txt,
                             "--duration", "10", "--drop-rate", "0.01",
                             "--corrupt-rate", "0.01", "--reset-at", "5",
                             "--fault-seed", "5", "--noise-seed", "5"],
@@ -439,16 +441,16 @@ def test_cli():
         t("CLI stream equals the in-process generator with the same seeds",
           r.returncode == 0 and got == want, r.stdout.strip())
 
-        r2 = subprocess.run([py, os.path.join(REPO, "read_serial.py"), txt, csvp],
+        r2 = subprocess.run([py, "-m", "insole.read_serial", txt, csvp],
                             cwd=REPO, capture_output=True, text=True)
         t("read_serial.py on the CLI stream: resets=1 reported, exit 1",
           r2.returncode == 1 and "resets=1" in r2.stdout, r2.stdout.strip().splitlines()[-2:])
 
-        r3 = subprocess.run([py, os.path.join(REPO, "gait_gen.py"), "--drop-rate", "0.1"],
+        r3 = subprocess.run([py, "-m", "insole.gait_gen", "--drop-rate", "0.1"],
                             cwd=REPO, capture_output=True, text=True)
         t("fault flags without --out are refused", r3.returncode != 0 and "--out" in r3.stderr)
 
-        r4 = subprocess.run([py, os.path.join(REPO, "gait_gen.py")],
+        r4 = subprocess.run([py, "-m", "insole.gait_gen"],
                             cwd=tmp, capture_output=True, text=True)
         wrote = sorted(f for f in os.listdir(tmp) if f.startswith("sim_"))
         t("no arguments still writes the five regression streams",

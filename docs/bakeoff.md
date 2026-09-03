@@ -1,23 +1,23 @@
 # Bake-off: CoP-only gait classification
 
-From `bakeoff.py`. Every number here is in that script's output; regenerate
-with `python bakeoff.py` (delete `features_sessions.csv` first to rebuild the
+From `scripts/bakeoff.py`. Every number here is in that script's output; regenerate
+with `python scripts/bakeoff.py` (delete `data/sim/features_sessions.csv` first to rebuild the
 frame from the sim sessions). Numbers are under the measured 274 × 91 mm
 geometry; the pre-geometry figures this file used to carry are listed at the
 end for the record.
 
 ## What I compared
 
-My LDA and QDA (`discriminant.py`), sklearn's `LogisticRegression`, and
+My LDA and QDA (`insole/discriminant.py`), sklearn's `LogisticRegression`, and
 sklearn's own LDA/QDA, on one session-disjoint split: 1123 stances, 12
 sessions, holding out `_03` of each class. n_train 853, n_test 270.
 
 Two features only, `cop_path_len` and `cop_displacement`. I dropped
 `contact_time_s`, `impulse_counts_s`, `time_to_peak_s`, `loading_rate_cps` and
 `peak_counts` — each is cadence one division removed, and the classes are
-*defined* by changing stride period in `make_sessions.py`. On the full 7 the
+*defined* by changing stride period in `insole/make_sessions.py`. On the full 7 the
 comparison measures the label-generating process, not the models.
-**TODO:** `bakeoff.py` never fits the full set, so that figure is absent here.
+**TODO:** `scripts/bakeoff.py` never fits the full set, so that figure is absent here.
 
 ## Against the floor
 
@@ -36,7 +36,7 @@ mean-centered log-discriminants; label agreement 1.000000.
 
 An earlier version of this file said all three models made the same mistake,
 "9 `fast` rows into `walk`". That was a count, not a row list, and it was
-wrong twice over. `bakeoff.py` now prints the misclassified row indices:
+wrong twice over. `scripts/bakeoff.py` now prints the misclassified row indices:
 
 | model | wrong | fast → walk | rows |
 |---|---|---|---|
@@ -83,7 +83,7 @@ All of this is simulated data. `gait_gen`'s constants, the detector thresholds,
 and the tests checking them were co-evolved, so the result is internally
 consistent by construction. The real `_02` captures are the first non-circular
 test of any of it, and on them this recipe scores below the majority floor
-(`sim_vs_real.py`, D2).
+(`scripts/sim_vs_real.py`, D2).
 
 ## Superseded figures
 

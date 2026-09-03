@@ -1,6 +1,6 @@
 """Regression tests for force calibration. Run from the repo root:
 
-    python3 test_calibration.py
+    python tests/test_calibration.py
 
 Stdlib only, like calibration.py itself, so these run on the bench laptop.
 
@@ -41,20 +41,21 @@ import statistics
 import sys
 import tempfile
 
-from calibration import (
+from insole.calibration import (
     FS_COUNTS, G_MPS2, NEAR_SATURATION_MARGIN,
     FLAG_OK, FLAG_FLAT, FLAG_POOR_FIT, FLAG_NO_DATA,
     apply_calibration, apply_gain_match, conductance, fit_sensor,
     grams_to_newtons, is_saturated, is_usable, load_calibration,
     load_gain_match, missing_fit, save_calibration,
 )
-from fit_calibration import derive_gain_match, write_gain_match
+from insole.fit_calibration import derive_gain_match, write_gain_match
 
 # The bench acceptance values the relative gain match must reproduce, from the
 # single matched cycle (all six sensors at ~12 N with a >=35 min rest). k to
 # 2 dp, corrections to 4 dp, exactly as specified. See docs/calibration_notes.md.
-GAIN_MANIFEST = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "cal_data", "calibration_manifest.csv")
+from insole.paths import CAL_DATA
+
+GAIN_MANIFEST = os.path.join(CAL_DATA, "calibration_manifest.csv")
 K_EXPECT = {0: 59.55, 1: 57.84, 2: 58.59, 3: 75.27, 4: 52.28, 5: 57.37}
 CORR_EXPECT = {0: 0.9900, 1: 0.9616, 2: 0.9741, 3: 1.2513, 4: 0.8692, 5: 0.9538}
 

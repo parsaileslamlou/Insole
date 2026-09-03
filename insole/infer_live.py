@@ -5,11 +5,11 @@ hands back, through the same validation, detector and feature code the batch
 pipeline uses, to a persisted classifier. Switching between a saved file, USB
 serial and BLE is a command-line argument, not a code change.
 
-    python infer_live.py sim_walk.txt                          replay a frame log
-    python infer_live.py data/real/walk02.csv --label walk     replay a CSV capture
-    python infer_live.py --source serial --port COM13 --duration 60
-    python infer_live.py --source ble --duration 60
-    python infer_live.py --source serial --out preds.csv       also write per-stance rows
+    python -m insole.infer_live data/sim/sim_walk.txt                  replay a frame log
+    python -m insole.infer_live data/real/walk02.csv --label walk      replay a CSV capture
+    python -m insole.infer_live --source serial --port COM13 --duration 60
+    python -m insole.infer_live --source ble --duration 60
+    python -m insole.infer_live --source serial --out preds.csv        also write per-stance rows
 
 What it prints, and why each line is there
 ------------------------------------------
@@ -64,7 +64,7 @@ it does not feed the detector or the features. Feeding gain-matched
 conductance into CoP would put the model on a distribution it was never
 trained on; changing that means retraining, which is a later decision.
 
-The persisted model is fitted on SIMULATED sessions (fit_model.py). On the
+The persisted model is fitted on SIMULATED sessions (scripts/fit_model.py). On the
 real _02 captures the same recipe scored far below the majority floor
 (sim_vs_real.py D2). Predictions on real gait are a plumbing check until a
 real training set exists, and the banner says so on every run.
@@ -93,15 +93,17 @@ from time import perf_counter
 import numpy as np
 import pandas as pd
 
-import calibration as C
-import detector as D
-import read_serial as RS
-from discriminant import load_model, predict
-from features import cop_features, cop_trajectory, stance_features
+from insole import calibration as C
+from insole import detector as D
+from insole import read_serial as RS
+from insole.discriminant import load_model, predict
+from insole.features import cop_features, cop_trajectory, stance_features
 
-REPO = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_MODEL = os.path.join(REPO, "model_lda.json")
-DEFAULT_GAIN = os.path.join(REPO, "gain_match.json")
+from insole.paths import MODELS, REPO as _REPO
+
+REPO = str(_REPO)
+DEFAULT_MODEL = str(MODELS / "model_lda.json")
+DEFAULT_GAIN = str(MODELS / "gain_match.json")
 
 STATUS_EVERY_S = 5.0
 STAGES = ("read", "validate", "calibrate", "detect", "feature", "predict")
@@ -239,9 +241,9 @@ def build_parser():
     p.add_argument("--duration", type=float, default=None, metavar="SECONDS",
                    help=f"live capture length (default: read_serial.DURATION_S = {RS.DURATION_S})")
     p.add_argument("--model", default=DEFAULT_MODEL,
-                   help="persisted classifier from fit_model.py (default: model_lda.json)")
+                   help="persisted classifier from scripts/fit_model.py (default: models/model_lda.json)")
     p.add_argument("--gain", default=DEFAULT_GAIN,
-                   help="relative gain match JSON (default: gain_match.json); 'none' to skip")
+                   help="relative gain match JSON (default: models/gain_match.json); 'none' to skip")
     p.add_argument("--out", default=None,
                    help="write one CSV row per completed stance here")
     p.add_argument("--label", default=None,

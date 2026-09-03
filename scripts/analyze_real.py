@@ -2,7 +2,7 @@
 
 Run from the repo root:
 
-    python analyze_real.py
+    python scripts/analyze_real.py
 
 Every number quoted in docs/sim_vs_real.md sections C1-C6 is printed by this
 script, so a reader can regenerate the writeup's inputs rather than trusting
@@ -29,12 +29,14 @@ import sys
 import numpy as np
 import pandas as pd
 
-import calibration as C
-import detector as D
-from features import cop_frame, extract_features, frame_dt
+from insole import calibration as C
+from insole import detector as D
+from insole.features import cop_frame, extract_features, frame_dt
 
-REPO = os.path.dirname(os.path.abspath(__file__))
-REAL = os.path.join(REPO, "data", "real")
+from insole.paths import DATA_REAL, MODELS, REPO as _REPO
+
+REPO = str(_REPO)
+REAL = str(DATA_REAL)
 
 # As-captured filenames. stand_02 has an underscore and the other three do not;
 # they are committed under the names the capture tool produced, so the mapping
@@ -129,7 +131,7 @@ def c2_gain_match(data):
     """Apply the relative gain match, in conductance space."""
     rule("C2  GAIN MATCH -- applied to conductance, not to counts")
 
-    cal = C.load_gain_match(os.path.join(REPO, "gain_match.json"))
+    cal = C.load_gain_match(os.path.join(MODELS, "gain_match.json"))
     print(f"loaded gain_match.json: kind={cal['kind']!r} fs_counts={cal['fs_counts']}")
     print("corrections: " + "  ".join(
         f"s{i}={cal['corrections'][i]:.4f}" for i in range(6)))

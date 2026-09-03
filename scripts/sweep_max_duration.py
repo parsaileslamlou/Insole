@@ -1,6 +1,6 @@
 """The MAX_DURATION sweep behind the 120 -> 200 retune.
 
-    python sweep_max_duration.py
+    python scripts/sweep_max_duration.py
 
 Prints, for each candidate ceiling, how many stances find_stances + merge_close
 keeps on the four real _02 captures and on the five sim fixtures, plus the
@@ -18,10 +18,12 @@ import sys
 import numpy as np
 import pandas as pd
 
-import detector as D
-from gait_gen import SHUFFLE_CYCLE_S, true_stances
+from insole import detector as D
+from insole.gait_gen import SHUFFLE_CYCLE_S, true_stances
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+from insole.paths import DATA_REAL, DATA_SIM, REPO as _REPO
+
+REPO = str(_REPO)
 REAL = {"stand": "stand_02.csv", "walk": "walk02.csv",
         "fast": "fast02.csv", "shuffle": "shuffle02.csv"}
 SIM = [("sim_walk", "walk", 1.0), ("sim_fast", "walk", 0.6),
@@ -57,7 +59,7 @@ def main():
     print(f"{'activity':9s} {'runs':>5s} {'min':>5s} {'p50':>7s} {'p90':>7s} {'max':>5s}")
     real = {}
     for name, f in REAL.items():
-        total = total_of(os.path.join(REPO, "data", "real", f))
+        total = total_of(os.path.join(DATA_REAL, f))
         real[name] = total
         L = np.array([e - s + 1 for s, e in runs_unbounded(total)])
         print(f"{name:9s} {len(L):5d} {L.min():5d} {np.median(L):7.1f} "
@@ -65,9 +67,9 @@ def main():
 
     sims = {}
     for stem, mode, cyc in SIM:
-        path = os.path.join(REPO, stem + ".csv")
+        path = os.path.join(DATA_SIM, stem + ".csv")
         if not os.path.exists(path):
-            raise SystemExit(f"missing {path} -- run: python read_serial.py {stem}.txt {stem}.csv")
+            raise SystemExit(f"missing {path} -- run: python -m insole.read_serial {stem}.txt {stem}.csv")
         sims[stem] = (total_of(path), len(true_stances(60, mode=mode, cycle_s=cyc)))
     print()
     print("longest raw stance in each sim fixture (no ceiling):")

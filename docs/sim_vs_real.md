@@ -1,13 +1,13 @@
 # Simulator vs. real hardware — the first non-circular test
 
 Prompt 13, phases C–E. Everything below is measured on the four `_02` captures
-in `data/real/`, against `gait_gen.py` output, under the corrected 274 × 91 mm
+in `data/real/`, against `insole/gait_gen.py` output, under the corrected 274 × 91 mm
 geometry.
 
 > **Superseded in part.** Sections C5, C6 and D2–D5 were measured with
 > `MAX_DURATION = 120`. Finding 1 below led to raising it to 200
-> (`detector.py`, `sweep_max_duration.py`); re-running `analyze_real.py` and
-> `sim_vs_real.py` regenerates every table that depends on it. The tables here
+> (`insole/detector.py`, `scripts/sweep_max_duration.py`); re-running `scripts/analyze_real.py` and
+> `scripts/sim_vs_real.py` regenerates every table that depends on it. The tables here
 > are kept as the record of *why* the change was made; do not quote them as
 > current. Two figures in this document were also found to be unsupported and
 > are corrected in place below with a note: the `~940` calibration ceiling
@@ -21,10 +21,10 @@ transcribed by hand from a session that cannot be re-run.
 
 | Section | Produced by | Command |
 |---|---|---|
-| C1–C6 | [analyze_real.py](../analyze_real.py) | `python analyze_real.py` |
-| D1 | [bakeoff.py](../bakeoff.py) | `rm features_sessions.csv && python bakeoff.py` |
-| D2–D5 | [sim_vs_real.py](../sim_vs_real.py) | `python sim_vs_real.py` |
-| geometry | [detector.py](../detector.py) | `python test_geometry.py` |
+| C1–C6 | [scripts/analyze_real.py](../scripts/analyze_real.py) | `python scripts/analyze_real.py` |
+| D1 | [scripts/bakeoff.py](../scripts/bakeoff.py) | `rm data/sim/features_sessions.csv && python scripts/bakeoff.py` |
+| D2–D5 | [scripts/sim_vs_real.py](../scripts/sim_vs_real.py) | `python scripts/sim_vs_real.py` |
+| geometry | [insole/detector.py](../insole/detector.py) | `python tests/test_geometry.py` |
 
 `data/real/` is read-only throughout. Neither script writes into it.
 
@@ -46,7 +46,7 @@ sequence number and microsecond timestamp.
 - **fast** — faster cadence, **same figure-8 path**.
 - **shuffle** — feet dragging, short strides, minimal ground clearance.
 
-**The mismatch this sets up.** `gait_gen.py` models straight, symmetric,
+**The mismatch this sets up.** `insole/gait_gen.py` models straight, symmetric,
 stride-identical gait: one canonical stance shape repeated at a fixed period
 with a small cadence jitter. The real captures are a foot going round a
 figure-8 in a confined space. Continuous turning loads the foot asymmetrically
@@ -71,7 +71,7 @@ carries real frames end to end. Its accuracies are not a model result.
 
 No dropped frames in any capture, and the sampling interval is uniform to
 **±1 µs** — a jitter of 0.01% of the 10 ms period. This is the firmware's own
-timestamp, not an assumed 100 Hz: `insole.ipynb` cell 2 used to overwrite
+timestamp, not an assumed 100 Hz: `notebooks/insole.ipynb` cell 2 used to overwrite
 `ts_us` with `index * 10000`, which would have produced this table by
 construction. That line was deleted on this branch, so the uniformity above is
 a measurement rather than an artifact.
@@ -108,7 +108,7 @@ non-positive, so `apply_gain_match` returns `None` and the cell becomes NaN.
 Every below-threshold s4 zero lands there. That is the transform's rule about
 its own domain, not a claim the sample is missing — see C4.
 
-**Test confirmation.** The load-bearing assertion in `test_calibration.py`
+**Test confirmation.** The load-bearing assertion in `tests/test_calibration.py`
 still passes after this call site was written:
 
 ```
@@ -140,7 +140,7 @@ correction is applied and no frame is dropped on this basis.
 > "~940 counts" and reported 58.55–100%. Nothing in `cal_data/` reaches 940:
 > the highest raw sample is 824 (`cal_s5_t3.csv`) and the highest per-trial
 > mean is 809.11. The table above is the regenerated one
-> (`test_infer_live.py` recomputes the constant from `cal_data/`).
+> (`tests/test_infer_live.py` recomputes the constant from `cal_data/`).
 
 ## C4 — Zeros are below-threshold, not missing
 
@@ -536,7 +536,7 @@ Real walk contacts have a median natural length of 119 frames against the
 120-frame `MAX_DURATION` ceiling, so the threshold cuts through the middle of
 the distribution and 17 of 35 walk runs and 28 of 30 shuffle runs are discarded
 outright rather than clipped (C5 unbounded-run diagnostic,
-[analyze_real.py](../analyze_real.py)). This could not have been predicted
+[scripts/analyze_real.py](../scripts/analyze_real.py)). This could not have been predicted
 before collection: `MAX_DURATION` was set to 120 because the longest *simulated*
 stance was 58 frames, and nothing in the simulator suggested real contacts would
 land within one frame of the limit.
@@ -556,7 +556,7 @@ every contact.
 ### 3. Figure-8 asymmetry is present but below the geometry noise floor — **HYPOTHESIS**
 
 Real stance-to-stance medial-lateral CoP placement varies 31.4× more than
-simulated in walk and 19.9× more in fast (D4b, `sim_vs_real.py`), which is the
+simulated in walk and 19.9× more in fast (D4b, `scripts/sim_vs_real.py`), which is the
 direction a continuously turning path predicts and a straight symmetric
 simulator cannot produce. But the absolute spread is only 2.84 mm and 2.53 mm
 against a ±15 mm coordinate uncertainty, so this run cannot separate real
@@ -573,7 +573,7 @@ dataset **cannot** settle are marked and grouped at the end.
 ### A. Parameter retunes
 
 **A1. Raise `MAX_DURATION` from 120 frames to ~200, or make it activity-aware.**
-**Done: `MAX_DURATION = 200`.** The sweep is `sweep_max_duration.py`; walk
+**Done: `MAX_DURATION = 200`.** The sweep is `scripts/sweep_max_duration.py`; walk
 went 18 → 35 kept, shuffle 2 → 30, fast and stand unchanged.
 Motivated by C5: 17/35 walk and 28/30 shuffle runs exceed 120 frames, natural
 maxima are 144 (walk) and 164 (shuffle). Expected effect: walk detections rise
@@ -635,7 +635,7 @@ match is being asked to cover forces it never saw.
 
 ### C. Analysis changes
 
-**C1. Leave the `features.py` uniform-dt approximation as it is.** Motivated by
+**C1. Leave the `insole/features.py` uniform-dt approximation as it is.** Motivated by
 C6: the drift is at most 1 µs over the longest stance in any capture, because
 the sampling interval is uniform to ±1 µs (C1). Expected effect of changing it:
 none measurable. **Confidence: high** for this firmware; the moment sampling
@@ -643,7 +643,7 @@ becomes non-uniform (wireless, buffering, a different scheduler) this needs
 re-measuring, and the check is cheap.
 
 **C2. Re-examine the pooled covariance weighting and the Wald interval — but
-not on this data.** `bakeoff.py` already flags that its stride-level standard
+not on this data.** `scripts/bakeoff.py` already flags that its stride-level standard
 error treats near-duplicate strides as independent and that `accuracy_ci` is an
 unclipped Wald interval. Both concerns are about the *simulated* bake-off and
 are unchanged by anything measured here. **This data cannot settle either**: 68
@@ -668,6 +668,6 @@ high.** This resolves itself once A1 lands — it has.
 - **The ground-return hypothesis** (B2) and **the right remedy for s4** (B1).
 - **Whether `T_OFF` is the cause of shuffle's long runs** (A2) — no independent
   foot-off signal exists in this dataset.
-- **Anything about absolute force.** `gain_match.json` is a single-point
+- **Anything about absolute force.** `models/gain_match.json` is a single-point
   relative gain match and is not an absolute calibration; no newton figure in
   this document is anything but the calibration's own input.

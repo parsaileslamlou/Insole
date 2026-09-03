@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "created_utc": "2026-09-03T07:35:22Z",
-  "kind": "lda",
+  "created_utc": "2026-09-03T09:14:12Z",
+  "kind": "qda",
   "classes": [
     "fast",
     "shuffle",
@@ -31,14 +31,36 @@
     481,
     241
   ],
-  "cov": [
+  "covs": [
     [
-      0.0016143145161798243,
-      0.00045011339418087385
+      [
+        0.0009554336418644343,
+        0.0003462082710637163
+      ],
+      [
+        0.0003462082710637163,
+        0.0004637585010427934
+      ]
     ],
     [
-      0.00045011339418087385,
-      0.0006838555338757984
+      [
+        0.0020415537107918258,
+        0.0007381994129591777
+      ],
+      [
+        0.0007381994129591777,
+        0.0009220646390235063
+      ]
+    ],
+    [
+      [
+        0.0018579709174814704,
+        4.7116561819528814e-05
+      ],
+      [
+        4.7116561819528814e-05,
+        0.0005742657116353915
+      ]
     ]
   ],
   "meta": {
@@ -48,8 +70,8 @@
       "cop_displacement"
     ],
     "training_data": "SIMULATED: 12 gait_gen sessions via make_sessions.py, stances by detector.find_stances + merge_close, features by features.extract_features. Not evidence about hardware.",
-    "frame": "features_sessions.csv",
-    "frame_sha256": "0c61f578cfc283001600584cced763e22261c27e20a39d4b675cf4ee5c88292e",
+    "frame": "data/sim/features_sessions.csv",
+    "frame_sha256": "46b964ed7ec9bca9913c848b84936bfd80a354e3a690a6a7afda187f081b8abc",
     "n_rows": 1123,
     "sessions": [
       "sim_fast_00",
@@ -79,11 +101,11 @@
       ],
       "n_train": 853,
       "n_test": 270,
-      "accuracy": 0.9296296296296296,
-      "n_correct": 251,
-      "wilson95_lo": 0.8927148404768516,
-      "wilson95_hi": 0.9544902591135686,
-      "wald_se": 0.01556567702591867
+      "accuracy": 0.9259259259259259,
+      "n_correct": 250,
+      "wilson95_lo": 0.8883615716214477,
+      "wilson95_hi": 0.9515400357311241,
+      "wald_se": 0.015938203070812416
     },
     "geometry": {
       "insole_len_mm": 274.0,
@@ -122,6 +144,6 @@
       "MAX_DURATION": 200,
       "GAP_MERGE": 12
     },
-    "fit_script": "fit_model.py"
+    "fit_script": "scripts/fit_model.py"
   }
 }

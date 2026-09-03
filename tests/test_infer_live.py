@@ -1,7 +1,7 @@
 """Tests for the streaming path (infer_live.py, detector.StanceTracker,
 read_serial's seam changes). Run from the repo root:
 
-    python test_infer_live.py
+    python tests/test_infer_live.py
 
 Also collected by pytest. No hardware: the serial and BLE sources are
 replaced by fakes that yield the same bytes a file would.
@@ -29,15 +29,17 @@ import types
 import numpy as np
 import pandas as pd
 
-import calibration as C
-import detector as D
-import infer_live as IL
-import read_serial as RS
-from discriminant import fit_lda, fit_qda, load_model, predict, save_model
-from features import extract_features
+from insole import calibration as C
+from insole import detector as D
+from insole import infer_live as IL
+from insole import read_serial as RS
+from insole.discriminant import fit_lda, fit_qda, load_model, predict, save_model
+from insole.features import extract_features
 
-REPO = os.path.dirname(os.path.abspath(__file__))
-REAL = os.path.join(REPO, "data", "real")
+from insole.paths import CAL_DATA, DATA_REAL, DATA_SIM, MODELS, REPO as _REPO
+
+REPO = str(_REPO)
+REAL = str(DATA_REAL)
 
 SIM_FIXTURES = ["sim_walk", "sim_fast", "sim_shuffle", "sim_dropout", "sim_stand"]
 REAL_FILES = ["stand_02.csv", "walk02.csv", "fast02.csv", "shuffle02.csv"]
@@ -70,10 +72,10 @@ class Tally:
 # ---------------------------------------------------------------------------
 def ensure_csv(stem):
     """Sim CSVs are gitignored; rebuild from the committed .txt via read_serial."""
-    csv_path = os.path.join(REPO, stem + ".csv")
-    txt_path = os.path.join(REPO, stem + ".txt")
+    csv_path = os.path.join(DATA_SIM, stem + ".csv")
+    txt_path = os.path.join(DATA_SIM, stem + ".txt")
     if not os.path.exists(csv_path):
-        subprocess.run([sys.executable, os.path.join(REPO, "read_serial.py"),
+        subprocess.run([sys.executable, "-m", "insole.read_serial",
                         txt_path, csv_path], check=True, cwd=REPO,
                        stdout=subprocess.DEVNULL)
     return csv_path
@@ -182,7 +184,7 @@ def test_equivalence():
     for stem in SIM_FIXTURES:
         csv_path = ensure_csv(stem)
         feats = batch_features(csv_path)
-        code, out, rows = run_infer([os.path.join(REPO, stem + ".txt")])
+        code, out, rows = run_infer([os.path.join(DATA_SIM, stem + ".txt")])
         ok, detail = stream_features_match(rows, feats)
         t(f"equivalence {stem}.txt (frame log)", ok and code == 0, detail + f" exit={code}")
 
@@ -198,7 +200,7 @@ def test_equivalence():
     # with random thresholds, against find_stances + merge_close.
     n_files = 0
     all_eq = True
-    for path in sorted(glob.glob(os.path.join(REPO, "sim_*_[0-9][0-9].csv"))):
+    for path in sorted(glob.glob(os.path.join(DATA_SIM, "sim_*_[0-9][0-9].csv"))):
         df = pd.read_csv(path)
         total = df[D.SENSOR_COLS].sum(axis=1).to_numpy()
         got, _ = stances_via_tracker(total)
@@ -234,7 +236,7 @@ def test_equivalence():
 # ---------------------------------------------------------------------------
 def test_read_boundary():
     t = Tally()
-    txt = os.path.join(REPO, "sim_walk.txt")
+    txt = os.path.join(DATA_SIM, "sim_walk.txt")
     lines = [ln for ln in RS.file_lines(txt)]
     feats = batch_features(ensure_csv("sim_walk"))
     s0, e0 = int(feats.iloc[0]["start"]), int(feats.iloc[0]["end"])
@@ -275,7 +277,7 @@ def test_read_boundary():
 # ---------------------------------------------------------------------------
 def test_malformed_mid_stance():
     t = Tally()
-    lines = [ln for ln in RS.file_lines(os.path.join(REPO, "sim_walk.txt"))]
+    lines = [ln for ln in RS.file_lines(os.path.join(DATA_SIM, "sim_walk.txt"))]
     feats0 = batch_features(ensure_csv("sim_walk"))
     s0, e0 = int(feats0.iloc[0]["start"]), int(feats0.iloc[0]["end"])
     mid = (s0 + e0) // 2
@@ -291,7 +293,7 @@ def test_malformed_mid_stance():
         bad_csv = os.path.join(tmp, "bad.csv")
         write_lines(bad_txt, bad)
         # What the batch path sees: read_serial.py's CSV of the same bytes.
-        r = subprocess.run([sys.executable, os.path.join(REPO, "read_serial.py"),
+        r = subprocess.run([sys.executable, "-m", "insole.read_serial",
                             bad_txt, bad_csv], cwd=REPO, capture_output=True, text=True)
         t("read_serial.py replay of the corrupted log exits nonzero", r.returncode != 0,
           f"exit={r.returncode}")
@@ -327,7 +329,7 @@ def test_all_zero_frames():
         txt = os.path.join(tmp, "zeros.txt")
         csvp = os.path.join(tmp, "zeros.csv")
         write_lines(txt, lines)
-        subprocess.run([sys.executable, os.path.join(REPO, "read_serial.py"), txt, csvp],
+        subprocess.run([sys.executable, "-m", "insole.read_serial", txt, csvp],
                        cwd=REPO, check=True, stdout=subprocess.DEVNULL)
         feats = batch_features(csvp)
         code, out, rows = run_infer([txt])
@@ -365,7 +367,7 @@ def test_max_duration():
         txt = os.path.join(tmp, "long.txt")
         csvp = os.path.join(tmp, "long.csv")
         write_lines(txt, lines)
-        subprocess.run([sys.executable, os.path.join(REPO, "read_serial.py"), txt, csvp],
+        subprocess.run([sys.executable, "-m", "insole.read_serial", txt, csvp],
                        cwd=REPO, check=True, stdout=subprocess.DEVNULL)
         feats = batch_features(csvp)
         code, out, rows = run_infer([txt], quiet=False)
@@ -405,7 +407,7 @@ def test_max_duration():
 # ---------------------------------------------------------------------------
 def test_source_swap():
     t = Tally()
-    txt = os.path.join(REPO, "sim_fast.txt")
+    txt = os.path.join(DATA_SIM, "sim_fast.txt")
     lines = [ln for ln in RS.file_lines(txt)]
 
     code_f, out_f, rows_f = run_infer([txt])
@@ -568,7 +570,7 @@ def test_seam_and_watchdog():
             sys.modules["serial"] = saved_mod
 
     # infer_live and read_serial.main both turn a stall into exit 1.
-    lines = [ln for ln in RS.file_lines(os.path.join(REPO, "sim_walk.txt"))]
+    lines = [ln for ln in RS.file_lines(os.path.join(DATA_SIM, "sim_walk.txt"))]
     with fake_live_source(lines, "serial", raise_after=1500):
         code, out, rows = run_infer(["--source", "serial", "--duration", "60"])
     t("infer_live: stall -> 'FAIL: stalled' and exit 1",
@@ -594,12 +596,12 @@ def test_anchor_and_model():
 
     # CAL_MAX_COUNTS is a number about cal_data/, so recompute it from there.
     raw_max = 0
-    for path in glob.glob(os.path.join(REPO, "cal_data", "cal_s*_t*.csv")):
+    for path in glob.glob(os.path.join(CAL_DATA, "cal_s*_t*.csv")):
         df = pd.read_csv(path)
         raw_max = max(raw_max, int(df[D.SENSOR_COLS].to_numpy().max()))
     t("calibration.CAL_MAX_COUNTS equals the highest raw count in cal_data/",
       raw_max == C.CAL_MAX_COUNTS, f"cal_data max={raw_max} constant={C.CAL_MAX_COUNTS}")
-    man = pd.read_csv(os.path.join(REPO, "cal_data", "calibration_manifest.csv"), header=None)
+    man = pd.read_csv(os.path.join(CAL_DATA, "calibration_manifest.csv"), header=None)
     t("manifest count_mean maximum lies below it",
       man.iloc[:, 8].max() < C.CAL_MAX_COUNTS, f"count_mean max={man.iloc[:, 8].max()}")
 
@@ -618,8 +620,8 @@ def test_anchor_and_model():
               and m2["meta"]["features"] == ["f0", "f1"])
 
     # The committed deployment model, if present, reproduces the frame fit.
-    mpath = os.path.join(REPO, "model_lda.json")
-    fpath = os.path.join(REPO, "features_sessions.csv")
+    mpath = os.path.join(MODELS, "model_lda.json")
+    fpath = os.path.join(DATA_SIM, "features_sessions.csv")
     if os.path.exists(mpath) and os.path.exists(fpath):
         m = load_model(mpath)
         frame = pd.read_csv(fpath)
@@ -631,8 +633,8 @@ def test_anchor_and_model():
           and m["meta"]["n_rows"] == len(frame),
           f"n_rows={m['meta']['n_rows']}")
     else:
-        t("model_lda.json / features_sessions.csv present", False,
-          "run: python bakeoff.py && python fit_model.py")
+        t("models/model_lda.json / data/sim/features_sessions.csv present", False,
+          "run: python scripts/bakeoff.py && python scripts/fit_model.py")
     return t.result()
 
 

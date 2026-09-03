@@ -1,28 +1,25 @@
-# Minimal packaging so the flat-layout modules import from any working
-# directory without sys.path games:
+# Editable install of the `insole` package so the tests, the scripts and the
+# notebooks import it from any working directory:
 #
 #     pip install -e .            # library modules only (numpy, pandas)
 #     pip install -e .[hw]        # + pyserial, bleak for live capture
 #     pip install -e .[analysis]  # + matplotlib, scipy, scikit-learn
 #     pip install -e .[test]      # + pytest
+#     pip install -e .[notebook]  # + nbformat, nbconvert, ipykernel, pillow
 #
-# This is an editable install of the modules listed under py-modules; there
-# is no src/ or package directory and none is intended (repo consolidation is
-# a later stage). Scripts that run at import time (bakeoff.py, analyze_real.py,
-# sim_vs_real.py, capture_*.py, fit_*.py) are not listed: they are run, not
-# imported, and they still expect to be run from the repo root because they
-# read files by relative path.
-#
-# Without the install, the run-from-root invariant still holds: every module
-# here imports its siblings by bare name, which works whenever the repo root
-# is the current directory or is on PYTHONPATH.
+# Layout: insole/ is the package (everything a test or another module imports),
+# scripts/ holds programs that are only run, tests/ the tests, notebooks/ the
+# notebooks, models/ the persisted gain match and classifiers. Programs in the
+# package run as `python -m insole.<module>`; programs in scripts/ run as
+# `python scripts/<name>.py`. Both resolve repository paths through
+# insole/paths.py, never through the working directory.
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "insole"
-version = "0.14.0"
+version = "0.16.0"
 description = "Instrumented insole: capture, stance detection, features, classification"
 requires-python = ">=3.10"
 dependencies = [
@@ -34,25 +31,15 @@ dependencies = [
 hw = ["pyserial", "bleak"]
 analysis = ["matplotlib", "scipy", "scikit-learn"]
 test = ["pytest"]
+notebook = ["nbformat", "nbconvert", "ipykernel", "pillow", "matplotlib"]
 
-[tool.setuptools]
-py-modules = [
-    "calibration",
-    "detector",
-    "discriminant",
-    "features",
-    "gait_gen",
-    "heatmap",
-    "make_sessions",
-    "read_serial",
-    "infer_live",
-    "fit_model",
-]
+[tool.setuptools.packages.find]
+include = ["insole*"]
 
 [tool.pytest.ini_options]
 # The test scripts double as pytest modules. Run from the repo root:
 #     python -m pytest -q
 # or run any one directly for its PASS/FAIL line output:
-#     python test_stances.py
-testpaths = ["."]
+#     python tests/test_stances.py
+testpaths = ["tests"]
 python_files = ["test_*.py"]

@@ -1,15 +1,15 @@
 """Phase D of Prompt 13: the simulator against the four real _02 captures.
 
-Run from the repo root, after analyze_real.py:
+Run from the repo root, after scripts/analyze_real.py:
 
-    python sim_vs_real.py
+    python scripts/sim_vs_real.py
 
 Writes the comparison plots into figures/sim_vs_real/ and prints every table
 quoted in docs/sim_vs_real.md sections D1-D5. Reads data/real/ and never
 writes to it.
 
 D1 (the bake-off regeneration) lives in bakeoff.py, not here -- delete
-features_sessions.csv and re-run `python bakeoff.py` to rebuild it under the
+data/sim/features_sessions.csv and re-run `python scripts/bakeoff.py` to rebuild it under the
 current geometry. This script consumes the same regenerated frame for D2.
 
 Standing caveat that applies to every number below: one 60 s trial per class
@@ -27,15 +27,17 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                                   # noqa: E402
 
-import detector as D                                              # noqa: E402
-from features import (                                            # noqa: E402
+from insole import detector as D                                              # noqa: E402
+from insole.features import (                                            # noqa: E402
     cop_frame, extract_features, frame_dt,
 )
-from discriminant import fit_lda, fit_qda, predict                # noqa: E402
+from insole.discriminant import fit_lda, fit_qda, predict                # noqa: E402
 
-REPO = os.path.dirname(os.path.abspath(__file__))
-REAL = os.path.join(REPO, "data", "real")
-FIGDIR = os.path.join(REPO, "figures", "sim_vs_real")
+from insole.paths import DATA_REAL, DATA_SIM, FIGURES, REPO as _REPO   # noqa: E402
+
+REPO = str(_REPO)
+REAL = str(DATA_REAL)
+FIGDIR = os.path.join(FIGURES, "sim_vs_real")
 
 # real activity -> (real csv, sim csv). stand has no simulator counterpart
 # beyond sim_stand, which gait_gen emits as an unbroken load with no stances.
@@ -65,9 +67,9 @@ def load_real(fname):
 
 
 def load_sim(fname):
-    path = os.path.join(REPO, fname)
+    path = os.path.join(DATA_SIM, fname)
     if not os.path.exists(path):
-        raise SystemExit(f"missing {path} -- run: python read_serial.py "
+        raise SystemExit(f"missing {path} -- run: python -m insole.read_serial "
                          f"{fname[:-4]}.txt {fname}")
     return pd.read_csv(path)
 
@@ -91,9 +93,9 @@ def d2_plumbing(real_feats):
     print("only failure that matters here is a crash or an empty frame.")
     print()
 
-    frame_path = os.path.join(REPO, "features_sessions.csv")
+    frame_path = os.path.join(DATA_SIM, "features_sessions.csv")
     if not os.path.exists(frame_path):
-        print("features_sessions.csv missing -- run `python bakeoff.py` first "
+        print("features_sessions.csv missing -- run `python scripts/bakeoff.py` first "
               "to rebuild it under the current geometry. D2 skipped.")
         return
     sim = pd.read_csv(frame_path)

@@ -7,7 +7,7 @@ from sklearn.discriminant_analysis import (
 )
 import pytest
 
-from discriminant import (
+from insole.discriminant import (
     DegenerateClassError, accuracy_ci, fit_lda, fit_qda, pooled_eigen, predict,
 )
 

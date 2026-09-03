@@ -1,7 +1,7 @@
 """Fit and persist the deployment classifier for infer_live.py.
 
-    python fit_model.py                       # features_sessions.csv -> model_lda.json
-    python fit_model.py --kind qda --out model_qda.json
+    python scripts/fit_model.py                       # data/sim/features_sessions.csv -> models/model_lda.json
+    python scripts/fit_model.py --kind qda             # -> models/model_qda.json
 
 infer_live.py loads the JSON this writes and never refits. Everything the
 loaded model rests on is recorded in its "meta" block so a prediction can be
@@ -33,13 +33,14 @@ import sys
 import numpy as np
 import pandas as pd
 
-import detector as D
-from discriminant import accuracy_ci, fit_lda, fit_qda, predict, save_model
-from make_sessions import CLASSES, session_name
+from insole import detector as D
+from insole.discriminant import accuracy_ci, fit_lda, fit_qda, predict, save_model
+from insole.make_sessions import CLASSES, session_name
+from insole.paths import DATA_SIM, MODELS, REPO as _REPO
 
-REPO = os.path.dirname(os.path.abspath(__file__))
-FRAME_CSV = os.path.join(REPO, "features_sessions.csv")
-DEFAULT_OUT = os.path.join(REPO, "model_lda.json")
+REPO = str(_REPO)
+FRAME_CSV = os.path.join(DATA_SIM, "features_sessions.csv")
+DEFAULT_OUT = os.path.join(MODELS, "model_lda.json")
 
 # Same two features, same held-out session index, as bakeoff.py. Duplicated
 # rather than imported because bakeoff.py runs its whole analysis at import.
@@ -62,15 +63,15 @@ def fit(kind, X, y):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--frame", default=FRAME_CSV,
-                    help="feature frame built by bakeoff.py (default: features_sessions.csv)")
+                    help="feature frame built by scripts/bakeoff.py (default: data/sim/features_sessions.csv)")
     ap.add_argument("--kind", choices=("lda", "qda"), default="lda")
     ap.add_argument("--out", default=None,
-                    help="output JSON (default: model_<kind>.json in the repo root)")
+                    help="output JSON (default: models/model_<kind>.json)")
     args = ap.parse_args(argv)
-    out = args.out or os.path.join(REPO, f"model_{args.kind}.json")
+    out = args.out or os.path.join(MODELS, f"model_{args.kind}.json")
 
     if not os.path.exists(args.frame):
-        print(f"{args.frame} not found. Build it first:\n    python bakeoff.py")
+        print(f"{args.frame} not found. Build it first:\n    python scripts/bakeoff.py")
         return 1
 
     frame = pd.read_csv(args.frame)
@@ -148,7 +149,7 @@ def main(argv=None):
             "T_ON": D.T_ON, "T_OFF": D.T_OFF, "MIN_DURATION": D.MIN_DURATION,
             "MAX_DURATION": D.MAX_DURATION, "GAP_MERGE": D.GAP_MERGE,
         },
-        "fit_script": "fit_model.py",
+        "fit_script": "scripts/fit_model.py",
     }
     save_model(model, out, meta=meta)
     print(f"  wrote {os.path.relpath(out, REPO)}")
