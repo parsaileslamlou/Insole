@@ -197,10 +197,26 @@ insole worn, walking, and every number is read from the named log under
 "faults" is `malformed + bad_checksum + seq_breaks + timing_breaks + resets`.
 Both streaming runs completed 33 stances with `no_prediction=0
 stances_with_gaps=0`; they ran the sim-trained model, which was the default
-then, so their labels are a plumbing check. The exit codes are not printed in
-the logs; they follow from the counters through `read_serial.exit_code`, which
-returns 0 for every one of these. All six channels were seen live
+then, so their labels are a plumbing check. All six channels were seen live
 (`press.csv`, `press_medial.csv`).
+
+> **The 2026-09-03 exit codes in that table were DERIVED, not recorded.** The
+> bench was run as four commands typed by hand, and their logs end with
+> `read_serial`'s summary line and nothing after it, so no exit status was ever
+> written down. The `exit` column was reconstructed afterwards by feeding each
+> log's counters back through `read_serial.exit_code`, which is a pure function
+> of exactly those counters and returns 0 for all four. The reconstruction is
+> sound for what it covers, and it is still weaker than an observation: it
+> cannot see a process that exited nonzero for a reason the counters do not
+> describe — an exception on the way out, a signal, a write that failed after
+> the summary printed. Treat those four zeros as inferred.
+>
+> Fixed for next time: `scripts/bench_capture.sh` runs the same four commands
+> and appends `exit=<code>` to each log, captured the instant the command
+> returns. It has **not been run** — it needs the physical board — so the table
+> above is unchanged and every code in it is still a derivation. The first
+> bench run through that script will produce recorded codes, and if a recorded
+> code ever disagrees with the derived one, the recorded one is the fact.
 
 The two BLE runs completed only with the board on a USB power bank. Two
 attempts with the board powered from the PC's USB cable connected at MTU 517
