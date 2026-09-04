@@ -449,9 +449,13 @@ run (2 failed, 44 passed).
   walking frames, and does not hold below about 5 N, where the channels'
   activation thresholds diverge (s4 read 0 counts at 2.58 N while s5 read 239
   at 2.49 N).
-- **s4's activation threshold** makes the CoP a five-sensor centroid on half
-  the moving frames, with a 33.6–36.7 mm lateral bias. Its zeros are
-  below-threshold readings, never imputed or dropped.
+- **s4's activation threshold** makes the CoP a five-sensor centroid. Two
+  measurements of the cost, and they are not the same measurement: over all
+  moving frames of the `_02` captures, s4 reads 0 on 46–56 % of them and the
+  common-substitute bias is 33.6–36.7 mm (`scripts/analyze_real.py` C4/C4b);
+  over the frames *inside kept stances* across both sessions it is 20–35 % of
+  frames and a 12–14 mm shift (`docs/real_results.md` section 7). Its zeros
+  are below-threshold readings, never imputed or dropped.
 - **Sensor coordinates carry ±15 mm** on a 91 mm wide insole; a jig would
   tighten them.
 - **Detector thresholds are simulator-swept.** `T_ON`, `T_OFF`, `MIN_DURATION`
