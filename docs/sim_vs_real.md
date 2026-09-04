@@ -4,18 +4,21 @@ Stage 13, phases C–E. Everything below is measured on the four `_02` captures
 in `data/real/`, against `insole/gait_gen.py` output, under the corrected 274 × 91 mm
 geometry.
 
-> **Superseded in part.** Sections C5, C6 and D2–D5 were measured with
-> `MAX_DURATION = 120`. Finding 1 below led to raising it to 200
-> (`insole/detector.py`, `scripts/sweep_max_duration.py`); re-running `scripts/analyze_real.py` and
-> `scripts/sim_vs_real.py` regenerates every table that depends on it. The tables here
-> are kept as the record of *why* the change was made; do not quote them as
-> current. Two figures in this document were also found to be unsupported and
-> are corrected in place below with a note: the `~940` calibration ceiling
-> (C3, B4) and the `data/real/README.md` s4 ordering (finding 2, now fixed in
-> that file). D2 was regenerated at stage 20 under the shipped feature
-> representation (conductance): sim-trained LDA 0.3097 (35/113), QDA 0.2566
-> (29/113), still below the 0.4248 floor; `python scripts/sim_vs_real.py`
-> prints the current figures.
+> **Regenerated at `MAX_DURATION = 200` (2026-09-03).** Sections C5, C6 and
+> D2–D5 were first measured with `MAX_DURATION = 120`; finding 1 below led to
+> raising it to 200 (`insole/detector.py`, `scripts/sweep_max_duration.py`).
+> Their tables now carry the current output of `scripts/analyze_real.py` and
+> `scripts/sim_vs_real.py`; the 120-era numbers that are the evidence for
+> finding 1 are kept inside C5, labelled as such. Two figures were also found
+> to be unsupported and are corrected in place with a note: the `~940`
+> calibration ceiling (C3, B4) and the `data/real/README.md` s4 ordering
+> (finding 2, fixed in that file). D2 is the `_02` set through the sim-trained
+> models under the shipped representation (conductance): LDA 0.3097 (35/113),
+> QDA 0.2566 (29/113), below the 0.4248 floor; on all 224 stances of the
+> `_02` and `_03` sets, `scripts/train_real.py` section 9 gives 0.3795 and
+> 0.3438 against a 0.4152 floor. This document stays on the `_02` set as the
+> stage-13 record; the `_03` set is described in `data/real/README.md` and
+> enters every classifier number in `docs/real_results.md`.
 
 ## Regeneration
 
@@ -193,18 +196,25 @@ comparable ones.
 
 ## C5 — Stance detection, thresholds unchanged
 
-`T_ON = 1200`, `T_OFF = 450`, `MIN_DURATION = 15`, `MAX_DURATION = 120`,
-`GAP_MERGE = 12`. These were chosen by sweeping ~2016 combinations against
-simulated streams whose constants were co-evolved with them. **This is their
-first test against data the simulator did not produce, and they were not
-retuned.**
+`T_ON = 1200`, `T_OFF = 450`, `MIN_DURATION = 15`, `MAX_DURATION = 200`,
+`GAP_MERGE = 12`. The first four were chosen by sweeping ~2016 combinations
+against simulated streams whose constants were co-evolved with them, and this
+was their first test against data the simulator did not produce; they were not
+retuned. `MAX_DURATION` was 120 when this section was first run, and the
+120-era tables below are what raised it to 200.
+
+At the committed thresholds (current):
 
 | activity | raw | merged | median duration (fr) | min | max | median (s) | frames ≥ T_ON |
 |---|---|---|---|---|---|---|---|
 | stand   | 0  | **0**  | — | — | — | — | 100.0% |
-| walk    | 18 | **18** | 112.5 | 84 | 119 | 1.125 | 68.1% |
+| walk    | 35 | **35** | 119.0 | 84 | 144 | 1.190 | 68.1% |
 | fast    | 48 | **48** | 80.0  | 64 | 94  | 0.800 | 62.9% |
-| shuffle | 2  | **2**  | 99.0  | 96 | 102 | 0.990 | 65.8% |
+| shuffle | 30 | **30** | 141.0 | 96 | 164 | 1.410 | 65.8% |
+
+At `MAX_DURATION = 120`, as first run, the same table read walk 18 (median
+112.5 fr, max 119) and shuffle 2 (median 99.0 fr, max 102); fast and stand were
+unchanged.
 
 Total-force distribution, for reading those against the thresholds:
 
@@ -220,10 +230,11 @@ drops below `T_OFF` (min total force 3516), so it is a single unbroken 6000-fram
 run that the `MAX_DURATION` break discards. The mechanism is the one the
 simulator's `sim_stand` fixture was built to exercise.
 
-**walk and shuffle are badly under-detected.** Re-running the same T_ON/T_OFF
-hysteresis with the duration limits removed shows why:
+**At `MAX_DURATION = 120`, walk and shuffle were badly under-detected.**
+Re-running the same T_ON/T_OFF hysteresis with the duration limits removed
+showed why (120-era table, kept as the evidence for finding 1):
 
-| activity | runs | median len | min | max | over MAX_DURATION | under MIN_DURATION | kept |
+| activity | runs | median len | min | max | over 120 | under MIN_DURATION | kept at 120 |
 |---|---|---|---|---|---|---|---|
 | stand   | 1  | 6000.0 | 6000 | 6000 | 1 | 0 | 0 |
 | walk    | 35 | 119.0  | 84  | 144 | **17** | 0 | 18 |
@@ -233,22 +244,26 @@ hysteresis with the duration limits removed shows why:
 Runs longer than `MAX_DURATION` are **discarded outright**, not clipped — that
 is annihilation, one true stance becoming zero detections. Real walk contacts
 have a median natural length of **119 frames against a 120-frame ceiling**, so
-the threshold cuts straight through the middle of the distribution. Shuffle sits
-almost entirely above it (median 141), which is why 28 of 30 contacts vanish.
-Fast is the only activity comfortably inside the limit and is the only one
-detected cleanly.
+the threshold cut straight through the middle of the distribution. Shuffle sits
+almost entirely above it (median 141), which is why 28 of 30 contacts vanished.
+Fast was the only activity comfortably inside the limit and the only one
+detected cleanly. At 200 the same diagnostic reads over-ceiling 1 / 0 / 0 / 0
+(stand / walk / fast / shuffle) and keeps 0 / 35 / 48 / 30: every walk and
+shuffle contact survives, and standing is still the one run that the ceiling
+discards.
 
-**The survivors are a biased subsample.** Annihilation at a duration threshold
-is not random dropout — it removes exactly the long contacts:
+**At 120 the survivors were a biased subsample.** Annihilation at a duration
+threshold is not random dropout — it removes exactly the long contacts. Current
+values at 200, with the 120-era values in brackets:
 
 | activity | kept | kept median | natural median | kept max | natural max | first (s) | last (s) | largest gap (s) |
 |---|---|---|---|---|---|---|---|---|
-| walk    | 18 | 112.5 | 119.0 | 119 | 144 | 0.00 | 59.99 | 8.03 |
+| walk    | 35 (18) | 119.0 (112.5) | 119.0 | 144 (119) | 144 | 0.00 | 59.99 | 0.70 (8.03) |
 | fast    | 48 | 80.0  | 80.0  | 94  | 94  | 0.24 | 59.69 | 0.57 |
-| shuffle | 2  | 99.0  | 141.0 | 102 | 164 | 0.00 | 59.99 | **58.03** |
+| shuffle | 30 (2) | 141.0 (99.0) | 141.0 | 164 (102) | 164 | 0.00 | 59.99 | 0.77 (**58.03**) |
 
-Every real feature mean in C6 and D4 is computed on this truncated subsample.
-For shuffle the two surviving stances sit at the two ends of the capture with
+Every real feature mean in C6 and D4 is now computed on the full set of
+contacts. At 120 shuffle's two survivors sat at the two ends of the capture with
 58 seconds of nothing between them.
 
 ## C6 — Features, and the uniform-dt approximation
@@ -260,9 +275,9 @@ the real timestamps:
 | activity | stances | longest (fr) | approx (s) | true (s) | drift (µs) | drift (%) | worst drift (µs) |
 |---|---|---|---|---|---|---|---|
 | stand   | 0  | — | — | — | — | — | — |
-| walk    | 18 | 119 | 1.1800 | 1.1800 | +0.0 | +0.000000% | +0.0 |
+| walk    | 35 | 144 | 1.4300 | 1.4300 | +0.0 | +0.000000% | +0.0 |
 | fast    | 48 | 94  | 0.9300 | 0.9300 | +0.0 | +0.000000% | +1.0 |
-| shuffle | 2  | 102 | 1.0100 | 1.0100 | +0.0 | +0.000000% | +0.0 |
+| shuffle | 30 | 164 | 1.6300 | 1.6300 | +0.0 | +0.000000% | −1.0 |
 
 **The approximation costs at most 1 µs over any stance in this dataset**, because
 the sampling interval is uniform to ±1 µs (C1). On this hardware the shortcut is
@@ -272,11 +287,9 @@ Feature summaries (mean ± sd):
 
 | activity | n | peak_counts | time_to_peak_s | contact_time_s | loading_rate_cps | cop_path_len | cop_displacement |
 |---|---|---|---|---|---|---|---|
-| walk    | 18 | 5465.1 ± 453.7 | 0.513 ± 0.246 | 1.081 ± 0.104 | 8757 ± 5259 | 0.851 ± 0.210 | 0.448 ± 0.218 |
+| walk    | 35 | 5527.4 ± 422.0 | 0.583 ± 0.240 | 1.186 ± 0.139 | 8045 ± 4283 | 0.891 ± 0.220 | 0.493 ± 0.185 |
 | fast    | 48 | 5761.4 ± 245.2 | 0.419 ± 0.152 | 0.799 ± 0.066 | 11923 ± 5291 | 0.884 ± 0.203 | 0.594 ± 0.109 |
-| shuffle | 2  | 5635.0 ± 789.1 | 0.435 ± 0.516 | 0.980 ± 0.042 | 14219 ± 13308 | 0.820 ± 0.355 | 0.314 ± 0.066 |
-
-Shuffle's n = 2 makes every shuffle statistic below decorative.
+| shuffle | 30 | 5765.3 ± 346.6 | 0.734 ± 0.204 | 1.396 ± 0.149 | 6660 ± 3497 | 0.987 ± 0.211 | 0.343 ± 0.079 |
 
 ---
 
@@ -327,35 +340,38 @@ confusion between fast and walk.
 
 ## D2 — Plumbing check (not a classifier result)
 
-An LDA and a QDA fitted on all 1123 simulated stances, asked to label the 68
-real stances. **This is a plumbing check.** One 60 s trial per class cannot be
-trained on and is not being trained on; the point is that real frames survive
-ingest → detection → features → model without a shape error or a silent NaN.
-stand is excluded — it is not one of the model's three classes and yielded no
-stances anyway.
+An LDA and a QDA fitted on all 1123 simulated stances, asked to label the 113
+real `_02` stances under the shipped representation (conductance). **This is a
+plumbing check.** The point is that real frames survive ingest → detection →
+features → model without a shape error or a silent NaN. stand is excluded — it
+is not one of the model's three classes and yielded no stances anyway.
 
-Real stances scored: 68 (fast = 48, shuffle = 2, walk = 18). No non-finite CoP
-features; nothing was dropped.
+Real stances scored: 113 (fast = 48, shuffle = 30, walk = 35). No non-finite
+CoP features; nothing was dropped.
 
-**sim-trained LDA — accuracy 0.1029 (7/68)**
-
-| true ↓ / pred → | fast | shuffle | walk |
-|---|---|---|---|
-| fast    | 2 | 30 | 16 |
-| shuffle | 0 | 2  | 0  |
-| walk    | 0 | 15 | 3  |
-
-**sim-trained QDA — accuracy 0.0882 (6/68)**
+**sim-trained LDA — accuracy 0.3097 (35/113)**
 
 | true ↓ / pred → | fast | shuffle | walk |
 |---|---|---|---|
-| fast    | 1 | 34 | 13 |
-| shuffle | 0 | 1  | 1  |
-| walk    | 0 | 14 | 4  |
+| fast    | 4 | 25 | 19 |
+| shuffle | 0 | 19 | 11 |
+| walk    | 0 | 23 | 12 |
 
-Both land *below* the 0.4296 majority floor and below chance. The pipeline
-carries real data end to end — that is the entire claim. Do not quote these
-accuracies as a model result.
+**sim-trained QDA — accuracy 0.2566 (29/113)**
+
+| true ↓ / pred → | fast | shuffle | walk |
+|---|---|---|---|
+| fast    | 1 | 27 | 20 |
+| shuffle | 0 | 13 | 17 |
+| walk    | 0 | 20 | 15 |
+
+Both land *below* the 0.4248 majority floor of these 113 stances (always
+`fast`). On all 224 stances of the `_02` and `_03` sets the same two models
+score 0.3795 (85/224) and 0.3438 (77/224) against a 0.4152 floor
+(`scripts/train_real.py`, section 9). The pipeline carries real data end to end
+— that is the entire claim. Do not quote these accuracies as a model result.
+At `MAX_DURATION = 120` this section scored 68 stances (walk 18, shuffle 2) and
+read 0.1029 / 0.0882.
 
 ## D3 — Comparison plots
 
@@ -365,9 +381,9 @@ orange). The x axis is clipped to the first 12 s; 60 s at 100 Hz is an
 unreadable smear. The same unretuned detector shades both streams.
 
 - [figures/sim_vs_real/stand.png](../figures/sim_vs_real/stand.png) — real 0 stances, sim 0
-- [figures/sim_vs_real/walk.png](../figures/sim_vs_real/walk.png) — real 18, sim 60
+- [figures/sim_vs_real/walk.png](../figures/sim_vs_real/walk.png) — real 35, sim 60
 - [figures/sim_vs_real/fast.png](../figures/sim_vs_real/fast.png) — real 48, sim 100
-- [figures/sim_vs_real/shuffle.png](../figures/sim_vs_real/shuffle.png) — real 2, sim 120
+- [figures/sim_vs_real/shuffle.png](../figures/sim_vs_real/shuffle.png) — real 30, sim 120
 
 The walk plot shows the shape difference at a glance: sim produces narrow
 symmetric peaks reaching 2000–3200 counts, real produces broad plateaus around
@@ -378,22 +394,22 @@ symmetric peaks reaching 2000–3200 counts, real produces broad plateaus around
 Signed delta is real − sim. `cop_ml_range` is the medial-lateral spread of the
 CoP path within a stance, in normalised units (× 274 for mm).
 
-### walk — real n = 18, sim n = 60
+### walk — real n = 35, sim n = 60
 
 | metric | real mean | sim mean | Δ | Δ% | real sd | sim sd |
 |---|---|---|---|---|---|---|
-| contact_time_s | 1.0806 | 0.5605 | **+0.5201** | **+92.8%** | 0.1035 | 0.0022 |
-| peak_s0 | 1249.4 | 3208.9 | −1959.5 | −61.1% | 192.3 | 18.3 |
-| peak_s1 | 1307.8 | 1417.6 | −109.8 | −7.7% | 248.3 | 14.4 |
-| peak_s2 | 1186.7 | 2607.9 | −1421.1 | −54.5% | 74.7 | 19.5 |
-| peak_s3 | 1255.4 | 2808.7 | −1553.2 | −55.3% | 100.5 | 17.8 |
-| peak_s4 | 1168.9 | 2210.7 | −1041.7 | −47.1% | 441.4 | 18.1 |
-| peak_s5 | 1431.1 | 1800.1 | −369.0 | −20.5% | 371.9 | 20.9 |
-| time_to_peak_s | 0.5133 | 0.4278 | +0.0855 | +20.0% | 0.2461 | 0.0108 |
-| loading_rate_cps | 8756.9 | 14936.1 | −6179.1 | −41.4% | 5259.5 | 445.7 |
-| cop_path_len | 0.8513 | 0.9824 | −0.1311 | −13.3% | 0.2100 | 0.0396 |
-| cop_displacement | 0.4479 | 0.6991 | −0.2512 | −35.9% | 0.2178 | 0.0217 |
-| cop_ml_range | 0.0651 | 0.1581 | −0.0930 | −58.8% | 0.0254 | 0.0021 |
+| contact_time_s | 1.1857 | 0.5605 | **+0.6252** | **+111.5%** | 0.1388 | 0.0022 |
+| peak_s0 | 1269.1 | 3208.9 | −1939.9 | −60.5% | 208.5 | 18.3 |
+| peak_s1 | 1340.6 | 1417.6 | −77.0 | −5.4% | 276.0 | 14.4 |
+| peak_s2 | 1186.8 | 2607.9 | −1421.0 | −54.5% | 82.0 | 19.5 |
+| peak_s3 | 1268.0 | 2808.7 | −1540.7 | −54.9% | 107.8 | 17.8 |
+| peak_s4 | 1187.7 | 2210.7 | −1023.0 | −46.3% | 368.4 | 18.1 |
+| peak_s5 | 1498.8 | 1800.1 | −301.3 | −16.7% | 317.8 | 20.9 |
+| time_to_peak_s | 0.5834 | 0.4278 | +0.1556 | +36.4% | 0.2400 | 0.0108 |
+| loading_rate_cps | 8045.4 | 14936.1 | −6890.6 | −46.1% | 4283.1 | 445.7 |
+| cop_path_len | 0.8913 | 0.9824 | −0.0911 | −9.3% | 0.2199 | 0.0396 |
+| cop_displacement | 0.4929 | 0.6991 | −0.2062 | −29.5% | 0.1852 | 0.0217 |
+| cop_ml_range | 0.0718 | 0.1581 | −0.0864 | −54.6% | 0.0263 | 0.0021 |
 
 ### fast — real n = 48, sim n = 100
 
@@ -412,32 +428,29 @@ CoP path within a stance, in normalised units (× 274 for mm).
 | cop_displacement | 0.5940 | 0.7108 | −0.1168 | −16.4% | 0.1091 | 0.0208 |
 | cop_ml_range | 0.0779 | 0.1561 | −0.0782 | −50.1% | 0.0300 | 0.0033 |
 
-### shuffle — real n = 2, sim n = 120
-
-Two real stances. Every real column here is a summary of two numbers and should
-not be read as a distribution.
+### shuffle — real n = 30, sim n = 120
 
 | metric | real mean | sim mean | Δ | Δ% | real sd | sim sd |
 |---|---|---|---|---|---|---|
-| contact_time_s | 0.9800 | 0.2403 | **+0.7397** | **+307.9%** | 0.0424 | 0.0016 |
-| peak_s0 | 1327.0 | 1446.3 | −119.3 | −8.2% | 451.1 | 20.5 |
-| peak_s1 | 1335.0 | 642.0 | +693.0 | +107.9% | 445.5 | 19.6 |
-| peak_s2 | 1238.0 | 1177.6 | +60.5 | +5.1% | 14.1 | 21.7 |
-| peak_s3 | 1247.5 | 1265.4 | −17.9 | −1.4% | 16.3 | 21.5 |
-| peak_s4 | 535.0 | 994.2 | −459.2 | −46.2% | 277.2 | 21.3 |
-| peak_s5 | 1057.0 | 811.2 | +245.8 | +30.3% | 9.9 | 21.8 |
-| time_to_peak_s | 0.4350 | 0.1821 | +0.2529 | +138.9% | 0.5162 | 0.0086 |
-| loading_rate_cps | 14218.7 | 12108.0 | +2110.7 | +17.4% | 13307.6 | 614.0 |
-| cop_path_len | 0.8199 | 0.8223 | −0.0024 | −0.3% | 0.3553 | 0.0354 |
-| cop_displacement | 0.3137 | 0.6339 | −0.3201 | −50.5% | 0.0662 | 0.0184 |
-| cop_ml_range | 0.0548 | 0.1276 | −0.0728 | −57.1% | 0.0297 | 0.0035 |
+| contact_time_s | 1.3963 | 0.2403 | **+1.1561** | **+481.2%** | 0.1488 | 0.0016 |
+| peak_s0 | 1237.5 | 1446.3 | −208.8 | −14.4% | 239.7 | 20.5 |
+| peak_s1 | 1296.5 | 642.0 | +654.5 | +101.9% | 246.8 | 19.6 |
+| peak_s2 | 1231.2 | 1177.6 | +53.7 | +4.6% | 66.3 | 21.7 |
+| peak_s3 | 1259.5 | 1265.4 | −5.9 | −0.5% | 107.9 | 21.5 |
+| peak_s4 | 684.2 | 994.2 | −310.0 | −31.2% | 299.0 | 21.3 |
+| peak_s5 | 1024.1 | 811.2 | +213.0 | +26.3% | 210.6 | 21.8 |
+| time_to_peak_s | 0.7343 | 0.1821 | +0.5523 | +303.3% | 0.2039 | 0.0086 |
+| loading_rate_cps | 6660.0 | 12108.0 | −5448.1 | −45.0% | 3496.8 | 614.0 |
+| cop_path_len | 0.9870 | 0.8223 | +0.1647 | +20.0% | 0.2110 | 0.0354 |
+| cop_displacement | 0.3428 | 0.6339 | −0.2911 | −45.9% | 0.0787 | 0.0184 |
+| cop_ml_range | 0.1038 | 0.1276 | −0.0239 | −18.7% | 0.0192 | 0.0035 |
 
 **Two patterns run through all three activities.** Real contacts last
-93–308% longer than simulated ones while peaking 35–61% lower on most channels
-— real loading is slower and flatter than the simulator's sharp sinusoidal
-pulse. And the real per-stance standard deviations are one to two orders of
-magnitude larger than the simulator's on every metric (e.g. walk
-`contact_time_s` sd 0.1035 real vs 0.0022 sim), which is the simulator's
+112–481% longer than simulated ones while peaking 35–61% lower on most channels
+in walk and fast — real loading is slower and flatter than the simulator's
+sharp sinusoidal pulse. And the real per-stance standard deviations are one to
+two orders of magnitude larger than the simulator's on every metric (e.g. walk
+`contact_time_s` sd 0.1388 real vs 0.0022 sim), which is the simulator's
 stride-identical design showing up as near-zero variance.
 
 ### D4b — Stance-to-stance CoP placement spread
@@ -450,14 +463,16 @@ medial-lateral CoP position per stance, then the spread of that across stances.
 
 | activity | n real | n sim | real sd | sim sd | ratio | real sd (mm) | sim sd (mm) | real range (mm) |
 |---|---|---|---|---|---|---|---|---|
-| walk    | 18 | 60  | 0.01037 | 0.00033 | **31.4×** | 2.84 | 0.090 | 9.24 |
+| walk    | 35 | 60  | 0.00955 | 0.00033 | **28.9×** | 2.62 | 0.090 | 12.57 |
 | fast    | 48 | 100 | 0.00924 | 0.00046 | **19.9×** | 2.53 | 0.127 | 11.40 |
-| shuffle | 2  | 120 | 0.01048 | 0.00059 | 17.7× | 2.87 | 0.162 | 4.06 |
+| shuffle | 30 | 120 | 0.00844 | 0.00059 | 14.3× | 2.31 | 0.162 | 10.93 |
 
-Real stance placement varies 18–31× more than simulated, which is the direction
-the figure-8 path predicts. But the absolute magnitude is **2.5–2.9 mm**, well
+Real stance placement varies 14–29× more than simulated, which is the direction
+the figure-8 path predicts. But the absolute magnitude is **2.3–2.6 mm**, well
 inside the ±15 mm uncertainty on the sensor coordinates themselves — so the
 effect is not separable from the geometry error with this dataset. See finding 3.
+(At `MAX_DURATION = 120`, on 18 / 48 / 2 stances, the ratios were 31.4× / 19.9×
+/ 17.7× and the spreads 2.84 / 2.53 / 2.87 mm.)
 
 ## D5 — Sensor order check
 
@@ -465,29 +480,29 @@ Mean activation time within a stance for `walk_02`, relative to stance start.
 Two independent timings: `t_onset`, the first frame a sensor exceeds 20% of its
 own peak in that stance, and `t_peak`, the frame of its maximum.
 
-All six sensors were present in all 18 detected walk stances.
+All six sensors were present in all 35 detected walk stances.
 
 | sensor | in n stances | t_onset (s) | sd | t_peak (s) | sd | anatomy |
 |---|---|---|---|---|---|---|
-| s0 | 18 | 0.0150 | 0.0432 | 0.2539 | 0.1901 | heel (medial) |
-| s1 | 18 | 0.0111 | 0.0316 | 0.2222 | 0.2407 | heel (lateral) |
-| s2 | 18 | 0.0594 | 0.0466 | 0.5728 | 0.2332 | lateral midfoot |
-| s3 | 18 | 0.0933 | 0.0586 | 0.6428 | 0.2804 | 5th met head |
-| s4 | 18 | **0.3283** | 0.1796 | 0.8039 | 0.2277 | 1st met head |
-| s5 | 18 | 0.1700 | 0.1255 | 0.8567 | 0.2527 | hallux |
+| s0 | 35 | 0.0114 | 0.0378 | 0.2986 | 0.2211 | heel (medial) |
+| s1 | 35 | 0.0057 | 0.0233 | 0.2363 | 0.2095 | heel (lateral) |
+| s2 | 35 | 0.0803 | 0.0462 | 0.6877 | 0.2294 | lateral midfoot |
+| s3 | 35 | 0.1166 | 0.0594 | 0.7809 | 0.2649 | 5th met head |
+| s4 | 35 | **0.4109** | 0.2412 | 0.8877 | 0.2356 | 1st met head |
+| s5 | 35 | 0.2183 | 0.1449 | 0.9717 | 0.2617 | hallux |
 
 **Peak order: `s1 → s0 → s2 → s3 → s4 → s5`. No group-order violations.**
 That is the anatomical sequence — heel pair, lateral midfoot, met heads, hallux.
 **No channel pair appears swapped in firmware**, and nothing was changed. s1
-leads s0 by 32 ms and both sit inside the same heel group, so their internal
+leads s0 by 62 ms and both sit inside the same heel group, so their internal
 order is unconstrained; the gap is far below either sensor's own spread
-(sd 0.19–0.24 s) and carries no signal.
+(sd 0.21–0.22 s) and carries no signal.
 
 Onset order is `s1 → s0 → s2 → s3 → s5 → s4`, with exactly one group
 violation: **s4 fires after s5**. This is the s4 activation threshold showing up
-in the time domain rather than a wiring fault. s4 onset averages 0.3283 s into a
-stance whose mean contact time is 1.0806 s (C6) — it stays below turn-on for the
-first 30% of every contact, and it reads exactly zero in 52.02% of all walk
+in the time domain rather than a wiring fault. s4 onset averages 0.4109 s into a
+stance whose mean contact time is 1.1857 s (C6) — it stays below turn-on for the
+first 35% of every contact, and it reads exactly zero in 52.02% of all walk
 frames (C4). A sensor that cannot register the early part of a load will always
 appear to fire late; the peak timing, which does not depend on when the sensor
 crossed a threshold, puts s4 back in its anatomical place.
@@ -527,7 +542,7 @@ an artifact, not real load.
 measurement passes over the same six sensors disagreed by 12–22 mm. Every CoP
 number in this document carries that. It is large: ±15 mm is 5% of the insole
 length and 16% of its width, and it exceeds the entire real stance-to-stance CoP
-placement spread measured in D4b (2.5–2.9 mm).
+placement spread measured in D4b (2.3–2.6 mm).
 
 ---
 
@@ -542,7 +557,8 @@ outright rather than clipped (C5 unbounded-run diagnostic,
 [scripts/analyze_real.py](../scripts/analyze_real.py)). This could not have been predicted
 before collection: `MAX_DURATION` was set to 120 because the longest *simulated*
 stance was 58 frames, and nothing in the simulator suggested real contacts would
-land within one frame of the limit.
+land within one frame of the limit. It is 200 now, and at 200 every walk and
+shuffle contact is kept (C5).
 
 ### 2. The documented s4 bias ordering is wrong — **SUPPORTED** (since fixed)
 
@@ -553,15 +569,15 @@ least in fast", but measured zero fractions are stand 99.12%, fast 56.05%, walk
 worst, not least, and shuffle is the *lowest* zero fraction of the three moving
 activities. The same threshold shows up independently in the time domain, which
 is what makes this a sensor property rather than a bookkeeping quirk: s4's mean
-onset is 0.3283 s into a 1.0806 s stance (D5), so it misses the first 30% of
+onset is 0.4109 s into a 1.1857 s stance (D5), so it misses the first 35% of
 every contact.
 
 ### 3. Figure-8 asymmetry is present but below the geometry noise floor — **HYPOTHESIS**
 
-Real stance-to-stance medial-lateral CoP placement varies 31.4× more than
+Real stance-to-stance medial-lateral CoP placement varies 28.9× more than
 simulated in walk and 19.9× more in fast (D4b, `scripts/sim_vs_real.py`), which is the
 direction a continuously turning path predicts and a straight symmetric
-simulator cannot produce. But the absolute spread is only 2.84 mm and 2.53 mm
+simulator cannot produce. But the absolute spread is only 2.62 mm and 2.53 mm
 against a ±15 mm coordinate uncertainty, so this run cannot separate real
 turning asymmetry from measurement error on the sensor positions — it needs a
 tighter geometry and a straight-line trial to compare against.

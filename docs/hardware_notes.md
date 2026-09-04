@@ -164,7 +164,10 @@ Monitor first; one program per port (session note).
   produced about 6000 and the host reported success, firmware counters
   `conns=1 disc=1`; bleak's `disconnected_callback` never fired because the OS
   keeps the GATT object alive while notifications stop, so only the
-  inactivity watchdog sees it. Two host bugs found the same day, both fixed
+  inactivity watchdog sees it. On the bench day the 60 s BLE runs passed only
+  with the board on battery; from the PC's USB cable the link dropped about
+  210 ms after the connection-parameter request, twice (last section).
+  Two host bugs found the same day, both fixed
   in the tree: `#` status lines were counted as corruption (valid = 0 while
   the board counted 5804 frames), and the logger exited 0 while printing
   FAIL. Today `#` lines are the `status` counter and every FAIL path returns
@@ -178,15 +181,32 @@ Monitor first; one program per port (session note).
   size-guard discard neither increments `bleDropped` nor advances the cursor
   (cannot trigger at current sizes). Both listed in the README's open items.
 
-## What the live bench must show
+## What the live bench showed
 
-The stage-14 bench has not been run in this tree. Commands and pass criteria
-are in the README's hardware section: 60 s over serial and 60 s over BLE
-through `python -m insole.read_serial`, then `python -m insole.infer_live` on
-each; about 6000 valid frames per capture, `malformed=0 bad_checksum=0
-seq_breaks=0 timing_breaks=0 resets=0` over serial, `loss` at or under 2 %
-and `timing_breaks=0` over BLE, exit 0 everywhere, and identical counters
-between logger and streamer. For reference, the session that closed stage 14
-reported serial 6000 frames / 60 s with zero faults and BLE 6033 frames /
-60.3 s at 100.05 Hz with zero faults, 2190 notifications and 2 drops (session
-note); the bench is what turns that into evidence.
+The stage-14 bench ran on 2026-09-03 with the board on COM3 and the right
+insole worn, walking, and every number is read from the named log under
+`data/bench/` (the CSVs beside them are the captures):
+
+| run | log | valid | faults | loss | exit |
+| --- | --- | --- | --- | --- | --- |
+| logger, serial, 60 s | `serial_logger.log` | 6000 | 0 | 0.00 % | 0 |
+| logger, BLE, 60 s | `ble_logger.log` | 6003 | 0 | 0.00 % | 0 |
+| `infer_live`, serial, 60 s | `serial_preds.log` | 6001 | 0 | 0.00 % | 0 |
+| `infer_live`, BLE, 60 s | `ble_preds.log` | 6003 | 0 | 0.00 % | 0 |
+
+"faults" is `malformed + bad_checksum + seq_breaks + timing_breaks + resets`.
+Both streaming runs completed 33 stances with `no_prediction=0
+stances_with_gaps=0`; they ran the sim-trained model, which was the default
+then, so their labels are a plumbing check. The exit codes are not printed in
+the logs; they follow from the counters through `read_serial.exit_code`, which
+returns 0 for every one of these. All six channels were seen live
+(`press.csv`, `press_medial.csv`).
+
+The two BLE runs completed only with the board on a USB power bank. Two
+attempts with the board powered from the PC's USB cable connected at MTU 517
+and then stalled after 7 notifications, the firmware reporting `disc=1` about
+210 ms after `requestConnParams` (`ble_logger_attempt1_stalled.log`,
+`ble_logger_attempt2_stalled.log`, `ble_diag_after_stall.log`,
+`ble_diag_after_stall2.log`). Windows Bluetooth was toggled, the phone's
+Bluetooth disabled and the board moved to battery before the passing attempt,
+so the cause is narrowed to the Windows-side central and not isolated.

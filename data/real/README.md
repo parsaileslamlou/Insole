@@ -94,18 +94,15 @@ switches from its time-blocked within-session split to **leave-one-session-out**
 on its own once each class has two or more sessions. It was **not** run as part
 of this collection.
 
-> **Known breakage — read before running the analysis.** Adding this set makes
-> `scripts/train_real.py` abort *before* it reaches that multi-session path. The
-> guard at lines 440-442 sums stances per **label** and asserts against
-> `EXPECTED_STANCES`, which pins the `_02` counts alone, so `walk` now reports
-> **67 against an expected 35**. The minimal fix is to apply the pin to the `_02`
-> files only rather than to per-label totals; the multi-session branch four lines
-> below it (`multi_session`, `leave_one_session_out`) already exists and is what
-> the guard is blocking. `tests/test_train_real.py` fails five checks until then
-> — it also pins `meta["sessions"]` to the three `_02` names and asserts the
-> generated document still says "no per-session split exists", both of which stop
-> being true once the split flips. Deliberately left to whoever owns the
-> analysis.
+> **Guard, generalised.** When this set landed, `scripts/train_real.py`
+> summed stances per label and asserted against the `_02` totals, so the
+> script aborted on `walk: 67 stances, expected 35` and five checks in
+> `tests/test_train_real.py` went red. The guard now pins every training-grade
+> capture by file (`SESSIONS` in the script, `REAL_COUNTS` in
+> `tests/test_stances.py`; this set is 0 / 32 / 45 / 34) and refuses a capture
+> that is not pinned, so adding a session means adding its pin. With this set
+> present the script switches itself to leave-one-session-out; the numbers are
+> in `docs/real_results.md`.
 
 | file | date | activity | path shape | duration | valid | stances | notes |
 |---|---|---|---|---|---|---|---|
