@@ -127,6 +127,10 @@ REAL = str(DATA_REAL)
 # (as-captured filename, stances after find_stances + merge_close). One row per
 # training-grade capture; scripts/train_real.py pins the same counts in
 # SESSIONS and refuses a capture that is not pinned.
+#
+# Every count here was READ OFF THE DETECTOR, not counted independently. They
+# are regression pins, and green means unchanged, not right. See
+# check_real_stance_counts' docstring for what that does and does not license.
 REAL_COUNTS = [("stand_02.csv", 0), ("walk02.csv", 35),
                ("fast02.csv", 48), ("shuffle02.csv", 30),
                ("stand_03.csv", 0), ("walk_03.csv", 32),
@@ -136,15 +140,47 @@ REAL_COUNTS = [("stand_02.csv", 0), ("walk02.csv", 35),
 def check_real_stance_counts():
     """Stance counts on the real captures at the committed thresholds.
 
+    THESE ARE PINS MEASURED FROM THE DETECTOR, NOT INDEPENDENT GROUND TRUTH.
+    Read what this test means before trusting it:
+
+        The `_03` numbers -- stand 0, walk 32, fast 45, shuffle 34 -- were
+        produced by running detector.find_stances + merge_close on those four
+        captures and writing down what came out. Nobody counted 32 walk
+        stances by any means independent of the detector: there is no
+        hand-labelled truth for the real captures, no video, no force plate.
+        So this test cannot tell you the detector is CORRECT on real gait. It
+        can only tell you the detector still does what it did the day the pins
+        were taken.
+
+        GREEN HERE MEANS NO-CHANGE, NOT CORRECT. A detector that
+        systematically merges two real steps into one stance would have been
+        pinned merging them, and would pass this test forever.
+
+        This is the same circularity the project already flagged for the
+        Prompt 9 detector thresholds (T_ON, T_OFF, MIN_DURATION, GAP_MERGE),
+        which were swept on the simulator and then used to segment the real
+        captures the pins were taken from. It is recorded rather than fixed
+        because fixing it needs an independent measurement the six-sensor
+        hardware cannot make. The pins are still worth keeping: a regression
+        pin whose limits are stated is useful, and an unpinned capture is
+        worse -- scripts/train_real.py refuses to train on one.
+
+        The sim fixtures above are the opposite case and are the reason this
+        file's other tests mean something: their truth comes from
+        gait_gen.true_stances, which knows where each stance was generated,
+        independent of what the detector then found.
+
     Prediction for the `_02` set, written before the first run: stand 0, walk
     35, fast 48, shuffle 30 (analyze_real.py C5 and sweep_max_duration.py at
-    MAX_DURATION = 200). The `_03` set was pinned when it landed: stand 0,
-    walk 32, fast 45, shuffle 34. This is the only test that can see
-    MAX_DURATION: no simulated stance exceeds 60 frames, so every sim fixture
-    above passes at any ceiling from 120 to 1000, while at 120 the `_02` four
-    read 0 / 18 / 48 / 2 (over-ceiling runs are discarded, not clipped). Eight
-    minutes of real data from one subject; a regression fixture, not evidence
-    about generalisation.
+    MAX_DURATION = 200) -- that one was a prediction the detector could have
+    failed, made before the run. The `_03` set was pinned when it landed and
+    was not predicted in advance.
+
+    This is the only test that can see MAX_DURATION: no simulated stance
+    exceeds 60 frames, so every sim fixture above passes at any ceiling from
+    120 to 1000, while at 120 the `_02` four read 0 / 18 / 48 / 2
+    (over-ceiling runs are discarded, not clipped). Eight minutes of real data
+    from one subject; a regression fixture, not evidence about generalisation.
     """
     passed = failed = 0
     for fname, want in REAL_COUNTS:
