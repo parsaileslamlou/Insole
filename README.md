@@ -58,7 +58,7 @@ GitHub. [docs/writeup.md](docs/writeup.md) is the project in 600 words, and
 | [notebooks/](notebooks/) | [demo.ipynb](notebooks/demo.ipynb), the run-all demonstration (start here); [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
 | [docs/](docs/) | [writeup.md](docs/writeup.md) (the project in 600 words), [hardware_notes.md](docs/hardware_notes.md) (board, bench, failure modes, what the live bench must show), [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
 | [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (trained on the real captures). |
-| [data/real/](data/real/) | Four real captures, `_02` set (training/evaluation) and `_01` set (failure evidence). Read its README first. |
+| [data/real/](data/real/) | Twelve real captures in three sets: `_02` and `_03` (two sessions per class, training/evaluation) and `_01` (failure evidence). Read its README first. |
 | [data/sim/](data/sim/) | The five committed simulator fixtures `sim_*.txt`; generated CSVs and sessions land here too and are ignored. |
 | [cal_data/](cal_data/) | 42 bench calibration captures and their manifest. |
 | [figures/](figures/) | Rendered comparison figures. |
@@ -401,10 +401,17 @@ file and the fix.
   ~210 ms after the connection-parameter request. Three variables changed
   before the passing run, so the cause is narrowed to the Windows-side central,
   not identified. Powering from a battery is the workaround.
-- **One session per class.** Four minutes of real data, one 60 s trial per
-  activity, from one subject on one day, walking a figure-8 in a small space.
-  No per-session split is possible, so any real-data accuracy is a
-  within-session number with the leakage that implies.
+- **Two sessions per class exist, but `train_real.py` cannot yet use them.** The
+  `_03` set (2026-09-03) added a second 60 s trial per activity, which is the
+  precondition for `scripts/train_real.py` to switch itself to
+  leave-one-session-out and retire the within-session leakage. It does not get
+  that far: the stance guard at `scripts/train_real.py` lines 440-442 sums
+  stances per label and asserts against `EXPECTED_STANCES`, which pins the `_02`
+  set alone, so with `_03` present it aborts on `walk: 67 stances, expected 35`.
+  The guard was never generalised for the multi-session path the same function
+  selects four lines later. Until it is, `tests/test_train_real.py` fails five
+  checks. Still one subject, and two sessions is the minimum that makes a
+  per-session split possible, not a comfortable margin.
 - **Weight-shift was never collected**, although the collection plan listed it.
 - **The gain match extrapolates** above 824 counts, which is most loaded
   walking frames, and does not hold below about 5 N, where the channels'

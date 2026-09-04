@@ -57,7 +57,7 @@ Four activities, **60 s each, 100 Hz, USB serial (tethered)**:
 - **fast** — faster cadence, same figure-8 path.
 - **shuffle** — feet dragging, short strides, minimal ground clearance.
 
-## Two datasets — `_01` and `_02` (both kept)
+## Three datasets — `_01`, `_02` and `_03` (all kept)
 
 The second ("good") set is **not** named uniformly: `stand_02.csv` has an
 underscore, but `fast02.csv`, `shuffle02.csv`, and `walk02.csv` do not. Files were
@@ -79,6 +79,56 @@ for the writeup, **not** for training.
 ### `_02` — the good set
 
 Collected **after** the strain-relief fix. Use this set for analysis/training.
+
+### `_03` — second session per class
+
+Collected **2026-09-03**, same right-foot insole, same tethered USB serial at
+100 Hz, same small figure-8 area as `_02`. Named **uniformly** with an
+underscore, unlike `_02`; `scripts/train_real.py` discovers either form by label
+prefix, so the inconsistency above is not repeated here.
+
+This set exists so that every moving class has **two sessions**. With one
+session per class no per-session split was possible and every real-data accuracy
+was a within-session number with the leakage that implies. `scripts/train_real.py`
+switches from its time-blocked within-session split to **leave-one-session-out**
+on its own once each class has two or more sessions. It was **not** run as part
+of this collection.
+
+> **Known breakage — read before running the analysis.** Adding this set makes
+> `scripts/train_real.py` abort *before* it reaches that multi-session path. The
+> guard at lines 440-442 sums stances per **label** and asserts against
+> `EXPECTED_STANCES`, which pins the `_02` counts alone, so `walk` now reports
+> **67 against an expected 35**. The minimal fix is to apply the pin to the `_02`
+> files only rather than to per-label totals; the multi-session branch four lines
+> below it (`multi_session`, `leave_one_session_out`) already exists and is what
+> the guard is blocking. `tests/test_train_real.py` fails five checks until then
+> — it also pins `meta["sessions"]` to the three `_02` names and asserts the
+> generated document still says "no per-session split exists", both of which stop
+> being true once the split flips. Deliberately left to whoever owns the
+> analysis.
+
+| file | date | activity | path shape | duration | valid | stances | notes |
+|---|---|---|---|---|---|---|---|
+| `stand_03.csv` | 2026-09-03 | stand | stationary, quiet standing | 60 s | 6001 | 0 | s2 nonzero on 0.4 % of frames; s4 nonzero on 98.8 % — the reverse of `stand_02.csv` |
+| `walk_03.csv` | 2026-09-03 | walk | figure-8, small area | 60 s | 6001 | 32 | `walk02.csv` gave 35 |
+| `fast_03.csv` | 2026-09-03 | fast | figure-8, same area, faster cadence | 60 s | 6001 | 45 | `fast02.csv` gave 48 |
+| `shuffle_03.csv` | 2026-09-03 | shuffle | figure-8, feet dragging, minimal clearance | 60 s | 6001 | 34 | `shuffle02.csv` gave 30 |
+
+Every file: 6001 valid frames in 60.0 s with `malformed=0 bad_checksum=0
+seq_breaks=0 timing_breaks=0 resets=0 lost=0 (0.00 %)`, exit 0.
+
+**s0 is healthy across this set** — nonzero on 59.2 % (walk), 51.0 % (fast) and
+57.4 % (shuffle) of frames. The `_01` flat-zero signature does not recur, so the
+strain relief is still holding.
+
+**s2 during stand is unloading, not a fault.** `stand_03.csv` has s2 nonzero on
+only 0.4 % of frames while the other five sit at 97–100 %. s2 reaches 1214–1281
+counts and 66–96 % nonzero in this set's three moving files, so the channel
+works; the lateral midfoot simply carries no load in this standing posture.
+Note that the near-zero channel during stand **differs between sessions**: in
+`_02` it was s4 (zero on 99.1 % of stand frames), here s4 is nonzero on 98.8 %
+and s2 takes its place. Standing posture is not repeatable session to session,
+which is itself an argument for the per-session split this set enables.
 
 ## s4 zeros are NOT missing data
 
