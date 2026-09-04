@@ -1,6 +1,6 @@
 # Simulator vs. real hardware — the first non-circular test
 
-Prompt 13, phases C–E. Everything below is measured on the four `_02` captures
+Stage 13, phases C–E. Everything below is measured on the four `_02` captures
 in `data/real/`, against `insole/gait_gen.py` output, under the corrected 274 × 91 mm
 geometry.
 

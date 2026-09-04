@@ -1,8 +1,8 @@
-"""Generate the multi-session dataset for the Prompt 10 baseline model.
+"""Generate the multi-session dataset for the stage 10 baseline model.
 
 One file per (class, session), written into data/sim/. Sessions of the same class differ by RNG seed
 and a small cadence jitter, so a session-disjoint split has something to be
-disjoint about. Kept separate from gait_gen's STREAMS, which are the Prompt 9
+disjoint about. Kept separate from gait_gen's STREAMS, which are the stage 9
 regression fixtures and must not move.
 """
 import os

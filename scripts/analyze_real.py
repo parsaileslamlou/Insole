@@ -1,4 +1,4 @@
-"""Phase C of Prompt 13: the four _02 real captures through the pipeline.
+"""Phase C of stage 13: the four _02 real captures through the pipeline.
 
 Run from the repo root:
 
@@ -15,7 +15,7 @@ kept as failure evidence and is deliberately not analysed, trained on, or
 merged in -- see data/real/README.md.
 
 The detector thresholds are whatever detector.py holds when this runs; the
-script reads them, never sets them. When it was first run (Prompt 13) all five
+script reads them, never sets them. When it was first run (stage 13) all five
 were the simulator-swept values, and its C5 diagnostic showed MAX_DURATION = 120
 discarding 17/35 walk and 28/30 shuffle contacts. MAX_DURATION was then raised
 to 200 on the strength of that diagnostic (see its comment in detector.py and
@@ -273,7 +273,7 @@ def c4_s4_zeros(data):
 
 
 def c5_stances(data):
-    """Prompt 9 thresholds, unchanged, against real force."""
+    """Stage 9 thresholds, unchanged, against real force."""
     rule("C5  STANCE DETECTION -- detector.py thresholds as currently set")
 
     print(f"T_ON={D.T_ON}  T_OFF={D.T_OFF}  MIN_DURATION={D.MIN_DURATION}  "
@@ -437,7 +437,7 @@ def main():
             raise SystemExit(f"missing {path}")
         data[name] = load(fname)
 
-    print("Prompt 13 Phase C -- real captures through the pipeline")
+    print("Stage 13 Phase C -- real captures through the pipeline")
     print("source: data/real/  (read-only; nothing is written back there)")
     print("set:    _02 only. _01 is excluded -- intermittent s0, kept as evidence.")
     for name, fname in ACTIVITIES:

@@ -1,4 +1,4 @@
-"""Phase D of Prompt 13: the simulator against the four real _02 captures.
+"""Phase D of stage 13: the simulator against the four real _02 captures.
 
 Run from the repo root, after scripts/analyze_real.py:
 
@@ -387,7 +387,7 @@ def main():
         real_feats[name] = (features_under(real, r_st, name, SHIPPED) if r_st
                             else pd.DataFrame([]))
 
-    print("Prompt 13 Phase D -- simulator vs the real _02 captures")
+    print("Stage 13 Phase D -- simulator vs the real _02 captures")
     for name, rfile, sfile in PAIRS:
         print(f"  {name:9s} real=data/real/{rfile:16s} sim={sfile}")
 

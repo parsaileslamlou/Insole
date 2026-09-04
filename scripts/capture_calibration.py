@@ -12,7 +12,7 @@ row in calibration_manifest.csv, which is what a scale-aware fit consumes.
 
 Every frame source, and the frame parser itself, comes from read_serial. This
 script does not know the wire format and must never learn it -- a second
-parser is a second thing to keep in step with framespec.md, and the two would
+parser is a second thing to keep in step with docs/frame_spec.md, and the two would
 diverge the first time the format moved.
 
 --source file replays a saved capture through the identical code path, so the
