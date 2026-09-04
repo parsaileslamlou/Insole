@@ -598,10 +598,3 @@ carrying their complete history.
   produces a traceback and a nonzero exit instead of a short capture that looks
   clean. `tests/test_ble_transport.py` came with it and covers both that path
   and the batched-arrival timing check.
-
-### Pending elsewhere
-
-Not an open question about this repository — work that exists on another
-machine and is not represented here.
-
-- **The original finish log is unrecovered.**
