@@ -37,16 +37,20 @@ GitHub. [docs/writeup.md](docs/writeup.md) is the project in 700 words, and
             detector.find_stances       detector.StanceTracker ─ same state machine
                      │                          │
                      ▼                          ▼
-            features.* on representation B   features.* per stance ─ bit-identical
+            features.* on the model's rep   features.* per stance ─ bit-identical
                      │                          │
                      ▼                          ▼
             discriminant LDA / QDA      models/model_*.json  ─> prediction per stance
 
-  The detector sees raw counts. The features see representation B,
-  conductance x = counts / (4095 − counts) per channel, on every source
-  (insole/representations.py, chosen on the real captures at stage 20). The
-  gain match (models/gain_match.json) is applied per frame in conductance
-  space and drives the extrapolation counter only.
+  The detector always sees raw counts. What the FEATURES see is whatever the
+  loaded model's meta.representation names (insole/representations.py: A raw,
+  B conductance x = counts / (4095 − counts) per channel, C gain-matched
+  conductance); infer_live applies that transform and refuses a model whose
+  representation it cannot honour, naming both sides. The shipped default is
+  B, chosen on the real captures at stage 20 and left standing — a recorded
+  decision, not something the file format forces. The gain match
+  (models/gain_match.json) is applied per frame in conductance space and,
+  under A and B, drives the extrapolation counter only.
 ```
 
 ## Repository layout
@@ -54,17 +58,18 @@ GitHub. [docs/writeup.md](docs/writeup.md) is the project in 700 words, and
 | Path | Purpose |
 | --- | --- |
 | [insole/](insole/) | The package: everything a test or another module imports. `gait_gen` (frame codec + simulator + fault modes), `read_serial` (logger, the transport seam, the validator), `infer_live` (streaming inference), `detector`, `features`, `representations` (what the features see), `splits`, `discriminant`, `calibration`, `fit_calibration`, `heatmap`, `make_sessions`, `paths`. |
-| [scripts/](scripts/) | Programs that are run, never imported: `train_real.py` (the real-data classifier and its analysis), `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`. |
+| [scripts/](scripts/) | Programs that are run, never imported: `train_real.py` (the real-data classifier and its analysis), `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`, `bench_capture.sh` (the live bench, recording each run's exit code; needs the board). |
 | [tests/](tests/) | Every test. Each runs directly (PASS/FAIL lines, nonzero exit on failure) and under pytest. |
 | [notebooks/](notebooks/) | [demo.ipynb](notebooks/demo.ipynb), the run-all demonstration (start here); [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
 | [docs/](docs/) | [writeup.md](docs/writeup.md) (the project in 700 words), [hardware_notes.md](docs/hardware_notes.md) (board, bench, failure modes, what the live bench showed), [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
-| [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (trained on the real captures; `model_qda_real.json` is `infer_live`'s default). |
+| [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (real captures under B, conductance — `model_qda_real.json` is `infer_live`'s default), `model_lda_real_raw.json`, `model_qda_real_raw.json` (the same fits under A, raw counts). Every model records its own `representation`, and `infer_live` applies the one the model names. |
 | [data/real/](data/real/) | Twelve real captures in three sets: `_02` and `_03` (two sessions per class, training/evaluation) and `_01` (failure evidence). Read its README first. |
 | [data/sim/](data/sim/) | The five committed simulator fixtures `sim_*.txt`; generated CSVs and sessions land here too and are ignored. |
 | [data/bench/](data/bench/) | The stage-14 live bench: the 60 s logger and streamer captures over serial and BLE with their logs, the two stalled BLE attempts, and the press captures that show all six channels live. |
 | [cal_data/](cal_data/) | 42 bench calibration captures and their manifest. |
 | [figures/](figures/) | Rendered comparison figures. |
 | [firmware/insole/](firmware/insole/) | The Arduino sketch and its header. |
+| [githooks/](githooks/) | `commit-msg`, which refuses any commit message carrying an AI-tool attribution trailer. Enable it once per clone: `git config core.hooksPath githooks`. |
 | [run_demo.sh](run_demo.sh) | The simulator demo in one command; prints `DEMO OK` or exits nonzero. |
 
 Two invocation forms, used consistently everywhere: package programs run as
@@ -80,7 +85,15 @@ Every command below was executed as written. Python 3.10 or newer.
 git clone https://github.com/parsaileslamlou/Insole.git && cd Insole
 python3 -m venv .venv && source .venv/bin/activate      # Windows Git Bash: source .venv/Scripts/activate
 pip install -e ".[analysis,test,notebook]"
+git config core.hooksPath githooks                       # once per clone; see below
 ```
+
+That last line enables `githooks/commit-msg`, which refuses a commit message
+carrying an AI-tool attribution trailer. `core.hooksPath` is per-clone config
+and is not carried by a clone, so it has to be set again in each one. The
+commit log here is solo-authored and says so; the hook is what makes that a
+control rather than a habit, since a settings file can be edited and an
+instruction inside a session can be countermanded inside the same session.
 
 1. Generate a 60 s simulated walk (seeded, so the numbers below reproduce):
 
@@ -102,7 +115,7 @@ pip install -e ".[analysis,test,notebook]"
    python -m insole.infer_live demo_walk.txt --model models/model_lda.json --label walk --quiet
    model     : models/model_lda.json  kind=lda  classes=['fast', 'shuffle', 'walk']  features=['cop_path_len', 'cop_displacement']
    ...
-   features  : representation B (conductance) on every source; the detector sees raw counts; model fitted on 'conductance'
+   features  : representation B (conductance), read from the model's meta and applied on every source; the detector sees raw counts
    ...
    stances completed=60 discarded>MAX_DURATION(200)=0 discarded@reset=0 rejected<MIN_DURATION(15)=0 predicted=60 no_prediction=0 stances_with_gaps=0
    frames extrapolating (any sensor > 824 counts)=3420 (57.0%)  s4=0 frames=2388 (39.8%)  all-zero frames=43
@@ -128,8 +141,8 @@ pip install -e ".[analysis,test,notebook]"
 5. Run the tests (step 4 first: two checks read the frame it builds):
 
    ```
-   python -m pytest -q                 # 46 passed
-   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (306 across the nine files)
+   python -m pytest -q                 # 47 passed
+   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (331 across the nine files)
    ```
 
 6. Or do steps 1–3 in one command, deterministic, leaving nothing behind
@@ -355,7 +368,26 @@ is tested once out of its own session, and the headline pools the two folds.
 Headline, chosen by a rule fixed before any result was seen (CoP-only
 features; the representation and model, LDA or QDA, with the best pooled
 leave-one-session-out accuracy): raw counts, QDA, 0.6071 [0.5419, 0.6688]
-(136/224) against a 0.4152 floor, folds 0.6195 and 0.5946. The shipped model
+(136/224) against a 0.4152 floor, folds 0.6195 and 0.5946.
+
+> **The pooled interval is a LOWER BOUND on the uncertainty, not a confidence
+> interval for a new session.** It is a Wilson interval computed as if the 224
+> pooled stances were 224 independent observations. They are not. They are 224
+> stances drawn from 2 sessions of 1 subject, and stances within one session
+> share the subject, the day, the shoe, the sensor seating and the figure-8
+> path, so they are positively correlated; the effective number of independent
+> observations is nearer the number of sessions than the number of stances.
+> Treating correlated observations as independent understates the variance, so
+> the true interval is WIDER than the one printed, by an amount this data cannot
+> quantify: correcting it needs the between-session variance, and 2 sessions
+> estimate that from 2 points (1 degree of freedom), which is not an estimate.
+> The per-fold intervals are reported beside the pooled one for exactly this
+> reason: they are the widest honest statement available here. Read the pooled
+> interval as the floor of the uncertainty, never as its extent. This applies to
+> every pooled interval quoted below and in
+> [docs/real_results.md](docs/real_results.md).
+
+The shipped model
 is the same cell under conductance, the representation the streaming path
 feeds: 0.5982 [0.5329, 0.6602] (134/224), two stances apart. Walk recall is
 0.209: 39 of the 67 walk stances are called fast, which is the fast-versus-walk
@@ -364,9 +396,21 @@ now confirmed on hardware; shuffle is what the CoP separates. The
 within-session time-blocked split, the previous headline recipe, gives 0.6667
 on the same cell, so a session boundary costs about six points here. With all
 seven features (contact time and its relatives included) the best cell reaches
-0.7578 [0.6976, 0.8094] out of session, riding on cadence. The doc lists every
-misclassified stance, measures the s4-zero and gain-match effects on the CoP
-in millimetres, and checks peak force against onset time.
+0.7578 [0.6976, 0.8094] (169/223) out of session, riding on cadence.
+
+> **The two headline numbers are on different denominators: the CoP-only 0.6071
+> is on n = 224, the full-feature 0.7578 on n = 223.** One stance (`shuffle_03`
+> at t = 0.00 s) begins at the first frame of its capture, so it has no pre-onset
+> frames, `loading_rate_cps` is undefined there and `features.py` returns NaN
+> rather than imputing a value. Any cell whose feature set includes that feature
+> drops the stance from both sides of the split; the CoP-only cells do not use it
+> and keep it. The stance is named and dropped, never filled in. Differencing
+> 0.6071 and 0.7578 compares two accuracies measured on test sets that are not
+> the same set.
+
+The doc lists every misclassified stance, measures the s4-zero and gain-match
+effects on the CoP in millimetres, and checks peak force against onset time
+under a family-wise correction over all nine regressions run.
 
 **Real captures through the pipeline** (`python scripts/analyze_real.py`;
 [docs/sim_vs_real.md](docs/sim_vs_real.md), the stage-13 record, on the `_02`
@@ -408,18 +452,22 @@ python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 | [tests/test_calibration.py](tests/test_calibration.py) | Force fit recovery, flags, saturation; the gain match multiplies conductance, not counts; the six shipped corrections. | 55 |
 | [tests/test_capture_window.py](tests/test_capture_window.py) | The capture window is anchored on the first line, not process start. | 13 |
 | [tests/test_discriminant.py](tests/test_discriminant.py) | LDA/QDA against sklearn; Wilson interval; weighted pooled covariance; the `n_k <= p` guard. | 7 |
-| [tests/test_infer_live.py](tests/test_infer_live.py) | Streaming == batch features on every capture; read boundaries; malformed frames; all-zero frames; `MAX_DURATION` discards; file/serial/BLE parity; no state leaks; the stall watchdog. | 56 |
+| [tests/test_infer_live.py](tests/test_infer_live.py) | Streaming == batch features on every capture; read boundaries; malformed frames; all-zero frames; `MAX_DURATION` discards; file/serial/BLE parity; no state leaks; the stall watchdog; the model's representation drives the feature path and an unhonourable one is refused. | 81 |
 | [tests/test_faults.py](tests/test_faults.py) | The three fault modes through logger and streamer; byte identity with faults off; the accounting identity; the CLI. | 55 |
 | [tests/test_parse_frame.py](tests/test_parse_frame.py) | The frame codec's rejection paths (frame spec section 8). | 9 |
 | [tests/test_train_real.py](tests/test_train_real.py) | The splits (no overlap, order, sizes, contiguous blocks); leave-one-session-out on the two sessions (two folds, every stance once, no session on both sides, the per-fold class counts); identity gains make C equal B; the shipped representation reproduces the bake-off frame and raw counts still give the pre-switch figure; `scripts/train_real.py` end to end, with the split the data on disk allows. | 37 |
 
 Every file's checks print PASS/FAIL lines and return their counts; the
 `test_*` wrappers pytest collects assert that nothing failed, so a red check
-fails pytest too. **Run `python scripts/bakeoff.py` before pytest in a fresh
-clone**: `tests/test_infer_live.py` and `tests/test_train_real.py` read
-`data/sim/features_sessions.csv`, which that script builds and `.gitignore`
-excludes, and without it one check in each file fails with the command to
-run (2 failed, 44 passed).
+fails pytest too. **A fresh clone is green before anything is generated**:
+`tests/test_infer_live.py` and `tests/test_train_real.py` read
+`data/sim/features_sessions.csv`, which `scripts/bakeoff.py` builds and
+`.gitignore` excludes, and without it one check in each file prints `SKIP`
+with the command that produces it and counts as neither a pass nor a failure.
+Run `python scripts/bakeoff.py` first to have those two checks actually run —
+they compare the persisted sim frame against a fresh rebuild, which is worth
+having — but pytest is 47 passed either way. A missing generated artifact and
+a real failure are no longer reported as the same thing.
 
 ## Open items
 
@@ -439,11 +487,21 @@ run (2 failed, 44 passed).
   `tests/test_stances.py`). Two sessions is the minimum that makes a
   per-session split possible, not a comfortable margin: with two folds one odd
   session moves the number a lot, and it is still one subject on one path.
-- **The pre-registered rule now prefers raw counts.** On the two-session data
-  the CoP-only headline rule picks A (raw) over B (conductance) by two stances
-  in 224. The shipped representation is left at B, because switching it moves
-  the sim bake-off frame, the sim-trained models and the streaming path with
-  it; both numbers are in [docs/real_results.md](docs/real_results.md).
+- **The pre-registered rule now prefers raw counts, by a margin finer than the
+  data it is deciding on.** On the two-session data the CoP-only headline rule
+  picks A (raw) over B (conductance) by two stances in 224 — 0.9 % — and the two
+  cells' Wilson intervals, [0.5419, 0.6688] for A and [0.5329, 0.6602] for B,
+  overlap over 93 % of their length. Those intervals are themselves lower bounds
+  on the uncertainty. **A and B are statistically indistinguishable on this
+  data**, and which one the rule ranks first at this sample size is arbitrary.
+  **B remains shipped and is FROZEN — retained as a pre-existing freeze taken at
+  stage 20 on the `_02` set, not as this rule's verdict.** The rule did not
+  choose B here; it chose A, by a margin that means nothing, and the freeze was
+  left standing because switching the shipped representation moves the sim
+  bake-off frame, the sim-trained models and the streaming path together, for a
+  change this data cannot show to be an improvement. Any statement that the rule
+  selected B is wrong. Both numbers, and real models fitted under both
+  representations, are in [docs/real_results.md](docs/real_results.md).
 - **Weight-shift was never collected**, although the collection plan listed it.
 - **The gain match extrapolates** above 824 counts, which is most loaded
   walking frames, and does not hold below about 5 N, where the channels'
@@ -467,10 +525,13 @@ run (2 failed, 44 passed).
   gain-matched representation C scores the same as B on the two-session data
   (0.5982 both) while extrapolating on most loaded frames, so the gain match
   drives the extrapolation counter only and the calibration stage never
-  reaches the classifier. Wiring C in is a one-line change to
-  `insole.representations.SHIPPED` plus a refit of every model; on this data
-  it would move the headline by at most two stances in 224. A decision, not a
-  finding.
+  reaches the classifier. This is now a **recorded decision, not a consequence
+  of the file format**: every model JSON carries a `representation` field,
+  `infer_live` applies whichever one the model names, and real models are
+  persisted under both A and B. Shipping C would be a change of the default in
+  `insole.representations.SHIPPED` plus a refit — no longer a loader change. On
+  this data it would move the headline by at most two stances in 224. A
+  decision, not a finding.
 - **Firmware, left as is:** `Serial.printf` from core 0 can interleave with
   frame writes from core 1 (rare, MTU transition only); the BLE gather loop's
   size-guard discard neither increments `bleDropped` nor advances the cursor
