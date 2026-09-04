@@ -1,0 +1,7 @@
+# ble conn=0 mtu=0 notif=7 drop=0 noconn=210 refused=0 trunc=0 conns=1 disc=1
+# ble conn=0 mtu=0 notif=7 drop=0 noconn=310 refused=0 trunc=0 conns=1 disc=1
+# ble conn=0 mtu=0 notif=7 drop=0 noconn=410 refused=0 trunc=0 conns=1 disc=1
+# ble conn=0 mtu=0 notif=7 drop=0 noconn=510 refused=0 trunc=0 conns=1 disc=1
+# ble conn=0 mtu=0 notif=7 drop=0 noconn=610 refused=0 trunc=0 conns=1 disc=1
+# ble conn=0 mtu=0 notif=7 drop=0 noconn=710 refused=0 trunc=0 conns=1 disc=1
+source=serial valid=601 malformed=0 empty=0 bad_checksum=0 seq_breaks=0 lost=0 loss=0.00% timing_breaks=0 resets=0 status=6 source_drops=0 capture_s=6.0 device_s=6.0

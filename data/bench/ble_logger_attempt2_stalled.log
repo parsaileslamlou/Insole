@@ -1,0 +1,4 @@
+BLE: connected to INSOLE after 0.7s discovery, negotiated MTU = 517
+source=ble valid=1 malformed=0 empty=0 bad_checksum=0 seq_breaks=0 lost=0 loss=0.00% timing_breaks=0 resets=0 status=0 source_drops=0 capture_s=0.0 device_s=0.0
+NOTE: capture ran 0.0s, 60.0s short of the requested 60.0s
+FAIL: stalled -- ble INSOLE: no data for 3.0s (connected, no notifications)
