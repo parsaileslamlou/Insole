@@ -157,7 +157,7 @@ Always start from a fresh session.
 | 11 | Model bake-off | `scripts/bakeoff.py`, [docs/bakeoff.md](docs/bakeoff.md) | done |
 | 12 | Calibration: single-point relative gain match | `insole/calibration.py`, `cal_data/`, `models/gain_match.json` | done |
 | 13 | Real captures and sim-vs-real analysis | `data/real/`, `scripts/analyze_real.py`, [docs/sim_vs_real.md](docs/sim_vs_real.md) | done; the planned weight-shift activity was not collected |
-| 14 | Streaming inference over serial and BLE | `insole/infer_live.py`, firmware BLE | code and tests done; **live bench UNRUN** (pending hardware, see below) |
+| 14 | Streaming inference over serial and BLE | `insole/infer_live.py`, firmware BLE | done 2026-09-03; live bench run on the board, four of four captures pass (numbers below) |
 | 15 | Fault injection and robustness | `insole/gait_gen.py` fault modes, `tests/test_faults.py` | done |
 | 16 | Repository consolidation, this README | package layout | done |
 | 17 | Demo notebook | [notebooks/demo.ipynb](notebooks/demo.ipynb), `figures/demo/` | done |
@@ -210,14 +210,55 @@ python -m insole.infer_live --source serial --port COM13 --duration 60 --out ben
 python -m insole.infer_live --source ble --duration 60 --out bench_ble_preds.csv
 ```
 
-**Pass criteria for the stage-14 live bench (not yet run in this tree):** each
-60 s capture reports about 6000 valid frames with `malformed=0 bad_checksum=0
-seq_breaks=0 timing_breaks=0 resets=0` over serial, and over BLE `loss` at or
-under 2 % with `timing_breaks=0`; every command exits 0; `infer_live` completes
-stances on both transports with identical counters to the logger. A stall
-(`FAIL: stalled`) means the board went silent for 3 s while the link stayed up.
-The firmware prints `# ble ...` status lines once per second; the host counts
-them as `status`, not as corruption.
+**Pass criteria for the stage-14 live bench:** each 60 s capture reports about
+6000 valid frames with `malformed=0 bad_checksum=0 seq_breaks=0
+timing_breaks=0 resets=0` over serial, and over BLE `loss` at or under 2 % with
+`timing_breaks=0`; every command exits 0; `infer_live` completes stances on
+both transports with identical counters to the logger. A stall (`FAIL:
+stalled`) means the board went silent for 3 s while the link stayed up. The
+firmware prints `# ble ...` status lines once per second; the host counts them
+as `status`, not as corruption.
+
+**Live bench, run 2026-09-03 on the board: four of four captures pass.** Right
+insole worn, walking (in place or a small figure-8) for the whole of every run;
+ESP32-S3 on COM3. Every number below is read from the named log in
+`data/bench/`.
+
+| # | run | log | valid | rate | malformed | bad_checksum | seq_breaks | timing_breaks | resets | lost | exit |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | logger, serial | `serial_logger.log` | 6000 | 100.00 Hz | 0 | 0 | 0 | 0 | 0 | 0 (0.00 %) | 0 |
+| 2 | logger, BLE | `ble_logger.log` | 6003 | 100.05 Hz | 0 | 0 | 0 | 0 | 0 | 0 (0.00 %) | 0 |
+| 3 | `infer_live`, serial | `serial_preds.log` | 6001 | 100.02 Hz | 0 | 0 | 0 | 0 | 0 | 0 (0.00 %) | 0 |
+| 4 | `infer_live`, BLE | `ble_preds.log` | 6003 | 100.05 Hz | 0 | 0 | 0 | 0 | 0 | 0 (0.00 %) | 0 |
+
+Both streaming runs completed 33 stances with `predicted=33 no_prediction=0
+stances_with_gaps=0`; run 3 printed `shuffle=31 walk=2`, run 4 `shuffle=14
+walk=19`. The default model is sim-trained, so its labels on real walking are
+not evidence of anything and the bench does not grade them. Run 2's sequence
+numbers are contiguous across all 6003 frames.
+
+All six channels are live. The press captures reach s0 1789, s1 1769, s2 1786,
+s3 1746 (`press.csv`) and s4 1953, s5 1661 (`press_medial.csv`, which presses
+the two medial pads in a known order with a gap between them so each is
+attributed unambiguously — the first sweep missed s5 by pressing the wrong pad,
+which looks identical to a dead channel). Both logger runs show all six active
+through the walk, s4 lowest at 26–27 % of frames, as its activation threshold
+predicts.
+
+**The BLE runs completed only with the board on battery.** Two BLE attempts
+with the board powered from this PC's USB cable stalled identically: connected
+in 0.7–1.3 s at MTU 517, then the firmware counters showed `notif=7` (21
+frames) and `disc=1` roughly 210 ms after `requestConnParams`, while the host
+recorded `valid=1` and `FAIL: stalled` (`ble_logger_attempt1_stalled.log`,
+`ble_logger_attempt2_stalled.log`; firmware counters in
+`ble_diag_after_stall.log` and `ble_diag_after_stall2.log`). The board was not
+the fault: between attempts it logged `valid=601` over serial with every
+counter zero, and the `conns`/`disc` counters it prints exist only in firmware
+at or after the connection-parameter fix, so the reflash this symptom is
+otherwise diagnostic of does not apply. Three things changed before the passing
+attempt — Windows Bluetooth toggled off and on, the phone's Bluetooth disabled,
+and the board moved to a USB power bank — so the cause is narrowed to the
+Windows-side central but **not isolated**.
 
 **Calibration.** `models/gain_match.json` is a *single-point relative gain
 match*: the six channels' gains matched to their mean at one ~12 N load after
@@ -354,9 +395,12 @@ file and the fix.
 
 ## Open items
 
-- **Stage-14 live bench UNRUN.** The commands and pass criteria are in the
-  hardware section. Until it runs, the serial and BLE paths are verified only
-  against fakes that deliver the same bytes a file would.
+- **BLE stalls when the board is powered from the host PC's USB cable.** The
+  stage-14 bench passed on all four runs (hardware section), but only with the
+  board on battery for the BLE two; two attempts on PC power dropped the link
+  ~210 ms after the connection-parameter request. Three variables changed
+  before the passing run, so the cause is narrowed to the Windows-side central,
+  not identified. Powering from a battery is the workaround.
 - **One session per class.** Four minutes of real data, one 60 s trial per
   activity, from one subject on one day, walking a figure-8 in a small space.
   No per-session split is possible, so any real-data accuracy is a

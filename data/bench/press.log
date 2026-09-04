@@ -1,0 +1,21 @@
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=160 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=260 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=360 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=460 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=560 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=660 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=760 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=860 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=960 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1060 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1160 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1260 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1360 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1460 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1560 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1660 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1760 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1860 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1960 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2060 refused=0 trunc=0 conns=0 disc=0
+source=serial valid=2001 malformed=0 empty=0 bad_checksum=0 seq_breaks=0 lost=0 loss=0.00% timing_breaks=0 resets=0 status=20 source_drops=0 capture_s=20.0 device_s=20.0

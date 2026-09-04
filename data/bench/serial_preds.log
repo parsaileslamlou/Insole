@@ -1,0 +1,131 @@
+infer_live: source=serial port=COM3 duration=60s stall=3s
+model     : models\model_lda.json  kind=lda  classes=['fast', 'shuffle', 'walk']  features=['cop_path_len', 'cop_displacement']
+            trained on 1123 rows / 12 sessions; held-out check 0.9185 [0.8797, 0.9456] on 270 SIMULATED stances
+WARNING   : the model is fitted on simulated gait. On real captures this
+            recipe scored below the majority floor (sim_vs_real.py D2).
+            Predictions on real gait are a plumbing check, not a result.
+detector  : T_ON=1200 T_OFF=450 MIN_DURATION=15 MAX_DURATION=200 GAP_MERGE=12  (a run > MAX_DURATION is DISCARDED, not clipped)
+features  : representation B (conductance) on every source; the detector sees raw counts; model fitted on 'conductance'
+gain match: s0=0.9900  s1=0.9616  s2=0.9741  s3=1.2513  s4=0.8692  s5=0.9538  applied to x = counts/(4095 - counts); extrapolating above 824 counts
+
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=115 refused=0 trunc=0 conns=0 disc=0
+stance    1  frames      4..    44 ( 41 fr, 0.40 s) t=   0.04s  path=0.2381 disp=0.0877  -> shuffle  gap_frames=0 | valid=57 bad=0 seq_breaks=0 lost=0 resets=0 | stances=1 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=0.0% s4=0:100.0% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=215 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=315 refused=0 trunc=0 conns=0 disc=0
+stance    2  frames     87..   233 (147 fr, 1.46 s) t=   0.87s  path=0.9850 disp=0.3579  -> shuffle  gap_frames=0 | valid=246 bad=0 seq_breaks=0 lost=0 resets=0 | stances=2 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=53.7% s4=0:58.9% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=415 refused=0 trunc=0 conns=0 disc=0
+status  t=   4.0s  valid=400 bad=0 seq_breaks=0 lost=0 resets=0 | stances=2 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=64.2% s4=0:72.8% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=515 refused=0 trunc=0 conns=0 disc=0
+stance    3  frames    273..   413 (141 fr, 1.40 s) t=   2.73s  path=0.8561 disp=0.2547  -> shuffle  gap_frames=0 | valid=426 bad=0 seq_breaks=0 lost=0 resets=0 | stances=3 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=61.0% s4=0:74.4% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=615 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=715 refused=0 trunc=0 conns=0 disc=0
+stance    4  frames    464..   601 (138 fr, 1.37 s) t=   4.64s  path=0.6250 disp=0.1468  -> shuffle  gap_frames=0 | valid=614 bad=0 seq_breaks=0 lost=0 resets=0 | stances=4 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=63.2% s4=0:78.2% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=815 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=915 refused=0 trunc=0 conns=0 disc=0
+stance    5  frames    657..   799 (143 fr, 1.42 s) t=   6.57s  path=0.8206 disp=0.5236  -> shuffle  gap_frames=0 | valid=812 bad=0 seq_breaks=0 lost=0 resets=0 | stances=5 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=63.8% s4=0:70.1% allzero=0
+status  t=   9.0s  valid=900 bad=0 seq_breaks=0 lost=0 resets=0 | stances=5 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.6% s4=0:70.1% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1015 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1115 refused=0 trunc=0 conns=0 disc=0
+stance    6  frames    853..   996 (144 fr, 1.43 s) t=   8.53s  path=0.8025 disp=0.1982  -> shuffle  gap_frames=0 | valid=1009 bad=0 seq_breaks=0 lost=0 resets=0 | stances=6 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=64.5% s4=0:67.0% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1215 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1315 refused=0 trunc=0 conns=0 disc=0
+stance    7  frames   1067..  1204 (138 fr, 1.37 s) t=  10.67s  path=1.0152 disp=0.2627  -> shuffle  gap_frames=0 | valid=1217 bad=0 seq_breaks=0 lost=0 resets=0 | stances=7 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.5% s4=0:67.9% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1415 refused=0 trunc=0 conns=0 disc=0
+stance    8  frames   1257..  1387 (131 fr, 1.30 s) t=  12.57s  path=0.9306 disp=0.3216  -> shuffle  gap_frames=0 | valid=1400 bad=0 seq_breaks=0 lost=0 resets=0 | stances=8 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.6% s4=0:64.9% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1515 refused=0 trunc=0 conns=0 disc=0
+status  t=  14.0s  valid=1401 bad=0 seq_breaks=0 lost=0 resets=0 | stances=8 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.5% s4=0:64.9% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1615 refused=0 trunc=0 conns=0 disc=0
+stance    9  frames   1441..  1565 (125 fr, 1.24 s) t=  14.41s  path=0.7685 disp=0.2827  -> shuffle  gap_frames=0 | valid=1578 bad=0 seq_breaks=0 lost=0 resets=0 | stances=9 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.9% s4=0:65.3% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1715 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1815 refused=0 trunc=0 conns=0 disc=0
+stance   10  frames   1628..  1753 (126 fr, 1.25 s) t=  16.28s  path=0.6255 disp=0.1964  -> shuffle  gap_frames=0 | valid=1766 bad=0 seq_breaks=0 lost=0 resets=0 | stances=10 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.6% s4=0:66.3% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=1915 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2015 refused=0 trunc=0 conns=0 disc=0
+status  t=  19.0s  valid=1902 bad=0 seq_breaks=0 lost=0 resets=0 | stances=10 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.5% s4=0:64.9% allzero=0
+stance   11  frames   1815..  1949 (135 fr, 1.34 s) t=  18.15s  path=0.7575 disp=0.3336  -> shuffle  gap_frames=0 | valid=1962 bad=0 seq_breaks=0 lost=0 resets=0 | stances=11 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.2% s4=0:64.9% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2115 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2215 refused=0 trunc=0 conns=0 disc=0
+stance   12  frames   2003..  2149 (147 fr, 1.46 s) t=  20.03s  path=0.8720 disp=0.2416  -> shuffle  gap_frames=0 | valid=2162 bad=0 seq_breaks=0 lost=0 resets=0 | stances=12 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.5% s4=0:64.2% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2315 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2415 refused=0 trunc=0 conns=0 disc=0
+stance   13  frames   2229..  2362 (134 fr, 1.33 s) t=  22.29s  path=0.8715 disp=0.4415  -> shuffle  gap_frames=0 | valid=2375 bad=0 seq_breaks=0 lost=0 resets=0 | stances=13 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.0% s4=0:63.7% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2515 refused=0 trunc=0 conns=0 disc=0
+status  t=  24.0s  valid=2402 bad=0 seq_breaks=0 lost=0 resets=0 | stances=13 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=61.3% s4=0:64.1% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2615 refused=0 trunc=0 conns=0 disc=0
+stance   14  frames   2421..  2551 (131 fr, 1.30 s) t=  24.21s  path=1.0528 disp=0.0833  -> shuffle  gap_frames=0 | valid=2564 bad=0 seq_breaks=0 lost=0 resets=0 | stances=14 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=61.7% s4=0:61.6% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2715 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2815 refused=0 trunc=0 conns=0 disc=0
+stance   15  frames   2601..  2732 (132 fr, 1.31 s) t=  26.01s  path=0.7820 disp=0.2039  -> shuffle  gap_frames=0 | valid=2745 bad=0 seq_breaks=0 lost=0 resets=0 | stances=15 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=61.7% s4=0:61.4% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=2915 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3015 refused=0 trunc=0 conns=0 disc=0
+status  t=  29.0s  valid=2903 bad=0 seq_breaks=0 lost=0 resets=0 | stances=15 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.3% s4=0:60.8% allzero=0
+stance   16  frames   2777..  2919 (143 fr, 1.42 s) t=  27.77s  path=0.9689 disp=0.1499  -> shuffle  gap_frames=0 | valid=2932 bad=0 seq_breaks=0 lost=0 resets=0 | stances=16 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=61.9% s4=0:60.7% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3115 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3215 refused=0 trunc=0 conns=0 disc=0
+stance   17  frames   2971..  3106 (136 fr, 1.35 s) t=  29.71s  path=1.1046 disp=0.0465  -> shuffle  gap_frames=0 | valid=3119 bad=0 seq_breaks=0 lost=0 resets=0 | stances=17 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.0% s4=0:61.6% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3315 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3415 refused=0 trunc=0 conns=0 disc=0
+stance   18  frames   3154..  3306 (153 fr, 1.52 s) t=  31.54s  path=0.8666 disp=0.4530  -> shuffle  gap_frames=0 | valid=3319 bad=0 seq_breaks=0 lost=0 resets=0 | stances=18 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.3% s4=0:63.3% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3515 refused=0 trunc=0 conns=0 disc=0
+status  t=  34.0s  valid=3403 bad=0 seq_breaks=0 lost=0 resets=0 | stances=18 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.0% s4=0:63.1% allzero=0
+stance   19  frames   3353..  3471 (119 fr, 1.18 s) t=  33.53s  path=0.7265 disp=0.2357  -> shuffle  gap_frames=0 | valid=3484 bad=0 seq_breaks=0 lost=0 resets=0 | stances=19 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.1% s4=0:62.6% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3615 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3715 refused=0 trunc=0 conns=0 disc=0
+stance   20  frames   3534..  3682 (149 fr, 1.48 s) t=  35.34s  path=1.0728 disp=0.4880  -> walk     gap_frames=0 | valid=3695 bad=0 seq_breaks=0 lost=0 resets=0 | stances=20 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.1% s4=0:61.2% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3815 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=3915 refused=0 trunc=0 conns=0 disc=0
+stance   21  frames   3731..  3868 (138 fr, 1.37 s) t=  37.31s  path=0.7799 disp=0.1910  -> shuffle  gap_frames=0 | valid=3881 bad=0 seq_breaks=0 lost=0 resets=0 | stances=21 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.1% s4=0:61.1% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4015 refused=0 trunc=0 conns=0 disc=0
+status  t=  39.0s  valid=3904 bad=0 seq_breaks=0 lost=0 resets=0 | stances=21 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=61.8% s4=0:61.3% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4115 refused=0 trunc=0 conns=0 disc=0
+stance   22  frames   3918..  4051 (134 fr, 1.33 s) t=  39.18s  path=0.7623 disp=0.4260  -> shuffle  gap_frames=0 | valid=4064 bad=0 seq_breaks=0 lost=0 resets=0 | stances=22 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.3% s4=0:60.4% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4215 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4315 refused=0 trunc=0 conns=0 disc=0
+stance   23  frames   4118..  4235 (118 fr, 1.17 s) t=  41.18s  path=0.5816 disp=0.2173  -> shuffle  gap_frames=0 | valid=4248 bad=0 seq_breaks=0 lost=0 resets=0 | stances=23 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.1% s4=0:61.9% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4415 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4515 refused=0 trunc=0 conns=0 disc=0
+status  t=  44.0s  valid=4404 bad=0 seq_breaks=0 lost=0 resets=0 | stances=23 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.5% s4=0:63.2% allzero=0
+stance   24  frames   4288..  4420 (133 fr, 1.32 s) t=  42.88s  path=0.8432 disp=0.3106  -> shuffle  gap_frames=0 | valid=4433 bad=0 seq_breaks=0 lost=0 resets=0 | stances=24 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.1% s4=0:63.5% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4615 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4715 refused=0 trunc=0 conns=0 disc=0
+stance   25  frames   4470..  4603 (134 fr, 1.33 s) t=  44.70s  path=1.0254 disp=0.1931  -> shuffle  gap_frames=0 | valid=4616 bad=0 seq_breaks=0 lost=0 resets=0 | stances=25 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.1% s4=0:64.1% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4815 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=4915 refused=0 trunc=0 conns=0 disc=0
+stance   26  frames   4653..  4808 (156 fr, 1.55 s) t=  46.53s  path=0.7212 disp=0.2808  -> shuffle  gap_frames=0 | valid=4821 bad=0 seq_breaks=0 lost=0 resets=0 | stances=26 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.4% s4=0:65.6% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5015 refused=0 trunc=0 conns=0 disc=0
+status  t=  49.0s  valid=4905 bad=0 seq_breaks=0 lost=0 resets=0 | stances=26 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.3% s4=0:66.2% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5115 refused=0 trunc=0 conns=0 disc=0
+stance   27  frames   4854..  5007 (154 fr, 1.53 s) t=  48.54s  path=0.8526 disp=0.4798  -> shuffle  gap_frames=0 | valid=5020 bad=0 seq_breaks=0 lost=0 resets=0 | stances=27 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.7% s4=0:66.3% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5215 refused=0 trunc=0 conns=0 disc=0
+stance   28  frames   5048..  5170 (123 fr, 1.22 s) t=  50.48s  path=1.3808 disp=0.4723  -> walk     gap_frames=0 | valid=5183 bad=0 seq_breaks=0 lost=0 resets=0 | stances=28 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.9% s4=0:65.5% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5315 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5415 refused=0 trunc=0 conns=0 disc=0
+stance   29  frames   5234..  5357 (124 fr, 1.23 s) t=  52.34s  path=0.5889 disp=0.3690  -> shuffle  gap_frames=0 | valid=5370 bad=0 seq_breaks=0 lost=0 resets=0 | stances=29 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.8% s4=0:66.6% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5515 refused=0 trunc=0 conns=0 disc=0
+status  t=  54.1s  valid=5406 bad=0 seq_breaks=0 lost=0 resets=0 | stances=29 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.4% s4=0:66.9% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5615 refused=0 trunc=0 conns=0 disc=0
+stance   30  frames   5406..  5543 (138 fr, 1.37 s) t=  54.06s  path=0.8988 disp=0.1478  -> shuffle  gap_frames=0 | valid=5556 bad=0 seq_breaks=0 lost=0 resets=0 | stances=30 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.9% s4=0:65.4% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5715 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5815 refused=0 trunc=0 conns=0 disc=0
+stance   31  frames   5586..  5720 (135 fr, 1.34 s) t=  55.86s  path=0.6855 disp=0.3735  -> shuffle  gap_frames=0 | valid=5733 bad=0 seq_breaks=0 lost=0 resets=0 | stances=31 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=63.1% s4=0:66.4% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=5915 refused=0 trunc=0 conns=0 disc=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=6015 refused=0 trunc=0 conns=0 disc=0
+status  t=  59.1s  valid=5907 bad=0 seq_breaks=0 lost=0 resets=0 | stances=31 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=63.3% s4=0:66.2% allzero=0
+stance   32  frames   5778..  5928 (151 fr, 1.50 s) t=  57.78s  path=0.9330 disp=0.2712  -> shuffle  gap_frames=0 | valid=5941 bad=0 seq_breaks=0 lost=0 resets=0 | stances=32 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=63.1% s4=0:66.4% allzero=0
+# ble conn=0 mtu=0 notif=0 drop=0 noconn=6115 refused=0 trunc=0 conns=0 disc=0
+stance   33  frames   5974..  6000 ( 27 fr, 0.26 s) t=  59.74s  path=0.2194 disp=0.0412  -> shuffle  gap_frames=0 | valid=6001 bad=0 seq_breaks=0 lost=0 resets=0 | stances=33 discarded>MAX=0 discarded@reset=0 rejected<MIN=0 | extrap=62.8% s4=0:66.6% allzero=0
+
+source=serial valid=6001 malformed=0 empty=0 bad_checksum=0 seq_breaks=0 lost=0 loss=0.00% timing_breaks=0 resets=0 status=61 source_drops=0 capture_s=60.0 device_s=60.0
+stances completed=33 discarded>MAX_DURATION(200)=0 discarded@reset=0 rejected<MIN_DURATION(15)=0 predicted=33 no_prediction=0 stances_with_gaps=0
+frames extrapolating (any sensor > 824 counts)=3771 (62.8%)  s4=0 frames=3997 (66.6%)  all-zero frames=0
+predictions: shuffle=31  walk=2
+
+per-stage timing (perf_counter; 'read' is time waiting on the source):
+stage         calls   total_ms   mean_us    max_us
+read           6062    59895.8    9880.5 1010047.4
+validate       6062      253.8      41.9     837.1
+calibrate      6001      256.2      42.7     563.2
+detect         6001       41.6       6.9     395.0
+feature          33      397.7   12051.6   21772.7
+predict          33       14.2     430.0    3816.7
+wrote 33 stance rows to data\bench\serial_preds.csv

@@ -34,6 +34,16 @@ data/sim/*
 !data/sim/sim_dropout.txt
 !data/sim/sim_stand.txt
 
+# ...and data/bench/: the stage-14 live bench, the one result that needed the
+# physical board -- the 60 s logger and the 60 s streaming classifier, each over
+# serial and over BLE -- plus the press captures that evidence all six channels
+# live. Same two-step re-include as data/real/. The .log files hold the counter
+# summaries the README quotes, including the two stalled BLE attempts, so they
+# are tracked alongside the CSVs.
+!data/bench/
+!data/bench/*.csv
+!data/bench/*.log
+
 # Jupyter
 .ipynb_checkpoints/
 *-checkpoint.ipynb
