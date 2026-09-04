@@ -1,10 +1,10 @@
 # Real-data results
 
-Every number in this file is produced by `python scripts/train_real.py`; regenerate it, do not edit it (the persisted models' meta records the git hash of the run). Figures: `figures/real_results/`. Models: `models/model_lda_real.json`, `models/model_qda_real.json`.
+Every number in this file is produced by `python scripts/train_real.py`; regenerate it, do not edit it (the persisted models' meta records the git hash of the run). Figures: `figures\real_results/`. Models: `models\model_lda_real.json`, `models\model_qda_real.json`.
 
 ## 1. Data
 
-The `_02` captures only (`data/real/README.md`): one 60 s session per activity, 100 Hz, tethered USB, one subject, one day, walking a figure-8. `_01` is failure evidence and is never trained or evaluated on. Segmentation uses `insole/detector.py` at the committed thresholds (T_ON=1200, T_OFF=450, MIN_DURATION=15, MAX_DURATION=200, GAP_MERGE=12) on raw counts, and the counts are asserted against `tests/test_stances.py`:
+Every training-grade capture in `data/real/` (`data/real/README.md`): 2 sets (`_02`, `_03`), one 60 s session per activity in each, 100 Hz, tethered USB, one subject, walking a figure-8. `_01` is failure evidence and is never trained or evaluated on. Segmentation uses `insole/detector.py` at the committed thresholds (T_ON=1200, T_OFF=450, MIN_DURATION=15, MAX_DURATION=200, GAP_MERGE=12) on raw counts, and every file's stance count is pinned twice, in `SESSIONS` here and in `tests/test_stances.py`:
 
 | activity | file | frames | stances kept |
 |---|---|---|---|
@@ -12,8 +12,12 @@ The `_02` captures only (`data/real/README.md`): one 60 s session per activity, 
 | walk | `walk02.csv` | 6000 | 35 |
 | fast | `fast02.csv` | 6000 | 48 |
 | shuffle | `shuffle02.csv` | 6000 | 30 |
+| stand | `stand_03.csv` | 6001 | 0 |
+| walk | `walk_03.csv` | 6001 | 32 |
+| fast | `fast_03.csv` | 6001 | 45 |
+| shuffle | `shuffle_03.csv` | 6001 | 34 |
 
-Standing is one unbroken 6000-frame contact, rejected by MAX_DURATION, so it contributes no stances and is excluded from classification. n = 113 moving stances (fast 48, shuffle 30, walk 35); the all-data majority floor is 0.4248.
+Each standing capture is one unbroken contact the length of the file, rejected by MAX_DURATION, so it contributes no stances and is excluded from classification. n = 224 moving stances (fast 93, shuffle 64, walk 67; per session fast 48 + 45, shuffle 30 + 34, walk 35 + 32); the all-data majority floor is 0.4152 (93/224, `fast`).
 
 ## 2. Representations and feature sets
 
@@ -23,198 +27,287 @@ Features are `insole/features.py`'s extractors, unchanged, computed on three per
 - **B conductance**: x = counts / (4095 − counts) per channel; x(0) = 0.
 - **C gain-matched**: x · g, g from `models/gain_match.json` (s0=0.9900, s1=0.9616, s2=0.9741, s3=1.2513, s4=0.8692, s5=0.9538).
 
-Force is linear in conductance (`insole/calibration.py`), so under B and C the centre of pressure is a force-proportional centroid and under A it is not. The gain match is a single-point relative match at ~12 N: above 824 counts (62–67 % of loaded walking frames, `scripts/analyze_real.py` C3) it extrapolates, and below ~5 N the channels' activation thresholds differ, so it does not hold there.
+Force is linear in conductance (`insole/calibration.py`), so under B and C the centre of pressure is a force-proportional centroid and under A it is not. The gain match is a single-point relative match at ~12 N: above 824 counts (62–67 % of loaded walking frames of the `_02` set, `scripts/analyze_real.py` C3) it extrapolates, and below ~5 N the channels' activation thresholds differ, so it does not hold there.
 
-**Shipped representation: B (conductance)** -- `insole.representations.SHIPPED`, the one `insole/infer_live.py` feeds on every source, `scripts/bakeoff.py` builds the sim frame under, and the persisted models are fitted on. It was chosen by the headline rule in section 4 (block-CV, CoP-only, LDA/QDA: A 0.6195, B 0.6372, C 0.6283). The simulator has no per-channel gain to correct, so under B every source is treated identically; the gain match still runs per frame for the extrapolation counter.
+**Shipped representation: B (conductance)** -- `insole.representations.SHIPPED`, the one `insole/infer_live.py` feeds on every source, `scripts/bakeoff.py` builds the sim frame under, and the persisted models are fitted on. It was chosen at stage 20 by the headline rule in section 4 on the `_02` set. On the current data the rule prefers A (raw) by 2 stance(s) in 224 (pooled leave-one-session-out accuracy, CoP-only, best of LDA/QDA: A 0.6071, B 0.5982, C 0.5982); the shipped representation is left at B, because switching it moves the sim bake-off frame, the sim-trained models and the streaming path with it, and the persisted real models are fitted under B so that `infer_live.py` accepts them (section 4 gives both numbers). The simulator has no per-channel gain to correct, so under B every source is treated identically; the gain match still runs per frame for the extrapolation counter and never reaches the classifier (variant B, not C).
 
 Two feature sets: **cop** = `cop_path_len`, `cop_displacement` (exactly the set `scripts/bakeoff.py` used, for comparability with the simulator), and **full** = all seven (`peak_counts`, `time_to_peak_s`, `contact_time_s`, `loading_rate_cps`, `impulse_counts_s` plus the two CoP features). The sim bake-off excluded the five timing/magnitude features because simulated fast and walk differ only in cadence, so any cadence feature reads the label off the generator. On real data cadence is measured, not constructed, so the full set is a legitimate classifier here, but it is not comparable with the sim number. Under B and C the count-valued features are in conductance units and keep their column names.
 
 ## 3. Split
 
-**time-blocked within each session: first 60% of stances train, last 40% test, guard band 0.** There is one session per class, so no per-session split exists. Stances are sorted by onset within each session; the earlier ones train and the later ones test. This is a within-session number and carries the leakage that implies: consecutive stances of one walk share the subject, the day, the shoe, the path and the sensor state. Do not read it as generalisation to a new session.
+**leave-one-session-out, 2 folds, pooled over the folds.** Every class has at least two sessions, so the script switched itself to leave-one-session-out: fold k holds out session k of every class and trains on the rest, so every stance is tested exactly once, out of its own session, and the headline pools the folds' predictions. Nothing in a test fold shares a session with anything in its training fold. It is still one subject, the same shoe, the same figure-8 path, and two sessions is the minimum that makes this split possible, not a comfortable margin: with two folds one odd session moves the number a lot.
 
-| class | train | test | dropped (guard) |
-|---|---|---|---|
-| fast | 29 | 19 | 0 |
-| shuffle | 18 | 12 | 0 |
-| walk | 21 | 14 | 0 |
+| fold | held out | fast train / test | shuffle train / test | walk train / test | n_train | n_test |
+|---|---|---|---|---|---|---|
+| 0 | `fast02`, `shuffle02`, `walk02` | 45 / 48 | 34 / 30 | 32 / 35 | 111 | 113 |
+| 1 | `fast_03`, `shuffle_03`, `walk_03` | 48 / 45 | 30 / 34 | 35 / 32 | 113 | 111 |
 
-n_train = 68, n_test = 45, test majority floor = 0.4222 (19/45, always `fast`).
+Pooled n_test = 224 (every stance once), majority floor = 0.4152 (93/224, always `fast`).
 
-Two further splits are reported beside it so the optimism gap is visible: a **random stance-level split** with the same per-class sizes, 20 seeds (mean, min, max), which puts near-copies of every test stance into training and is expected to be optimistic; and **contiguous-block cross-validation**, 5 time blocks per class, each block held out once, which tests every stance exactly once with its own block out of training.
+Reported beside it so the within-session optimism is visible: the **time-blocked within each session: first 60% of stances train, last 40% test, guard band 0**, pooled over sessions (fast 56/37, shuffle 38/26, walk 40/27), which was the headline recipe while there was one session per class and carries the leakage that implies (consecutive stances of one walk share the day, the sensor state and the path); and a **random stance-level split** with the same per-class sizes, 20 seeds (mean, min, max), which puts near-copies of every test stance into training and is expected to be the most optimistic of the three.
 
 ## 4. Results grid
 
-Accuracy on the time-blocked test set with a Wilson 95 % interval and the count, then the block-CV pooled accuracy, then the random-split mean [min, max]. LDA/QDA are `insole/discriminant.py`; LR is sklearn's `LogisticRegression` on standardised features, as in `scripts/bakeoff.py`. A skipped cell says why.
+Pooled leave-one-session-out accuracy with a Wilson 95 % interval and the count, then each fold's accuracy (fold order as in section 3), then the within-session time-blocked accuracy with its interval, then the random-split mean [min, max]. LDA/QDA are `insole/discriminant.py`; LR is sklearn's `LogisticRegression` on standardised features, as in `scripts/bakeoff.py`. A skipped cell says why.
 
-| rep | features | model | time-blocked acc [Wilson 95 %] | block-CV | random split |
-|---|---|---|---|---|---|
-| A | cop | lda | 0.6000 [0.4545, 0.7298] (27/45) | 0.6018 | 0.6067 [0.4667, 0.6889] |
-| A | cop | qda | 0.6444 [0.4984, 0.7678] (29/45) | 0.6195 | 0.6333 [0.5333, 0.7111] |
-| A | cop | lr | 0.6000 [0.4545, 0.7298] (27/45) | 0.5841 | 0.6011 [0.4889, 0.6889] |
-| A | full | lda | 0.8889 [0.7650, 0.9516] (40/45) | 0.8850 | 0.8656 [0.8000, 0.9333] |
-| A | full | qda | 0.8222 [0.6867, 0.9071] (37/45) | 0.8850 | 0.8600 [0.7556, 0.9778] |
-| A | full | lr | 0.8667 [0.7382, 0.9374] (39/45) | 0.8407 | 0.8500 [0.7778, 0.9111] |
-| B | cop | lda | 0.5778 [0.4330, 0.7103] (26/45) | 0.5752 | 0.5933 [0.4889, 0.6889] |
-| B | cop | qda | 0.6444 [0.4984, 0.7678] (29/45) **(headline)** | 0.6372 | 0.6433 [0.5556, 0.7333] |
-| B | cop | lr | 0.5778 [0.4330, 0.7103] (26/45) | 0.5841 | 0.5900 [0.4667, 0.6889] |
-| B | full | lda | 0.8889 [0.7650, 0.9516] (40/45) | 0.8673 | 0.8622 [0.8000, 0.9333] |
-| B | full | qda | 0.8444 [0.7122, 0.9225] (38/45) | 0.8584 | 0.8356 [0.7556, 0.9556] |
-| B | full | lr | 0.9111 [0.7927, 0.9649] (41/45) | 0.8584 | 0.8533 [0.8000, 0.9333] |
-| C | cop | lda | 0.5778 [0.4330, 0.7103] (26/45) | 0.5664 | 0.5867 [0.4667, 0.6889] |
-| C | cop | qda | 0.6444 [0.4984, 0.7678] (29/45) | 0.6283 | 0.6256 [0.5333, 0.7111] |
-| C | cop | lr | 0.5778 [0.4330, 0.7103] (26/45) | 0.5664 | 0.5822 [0.4667, 0.6667] |
-| C | full | lda | 0.8889 [0.7650, 0.9516] (40/45) | 0.8673 | 0.8644 [0.8000, 0.9333] |
-| C | full | qda | 0.8667 [0.7382, 0.9374] (39/45) | 0.8496 | 0.8278 [0.7333, 0.9333] |
-| C | full | lr | 0.9111 [0.7927, 0.9649] (41/45) | 0.8673 | 0.8533 [0.8000, 0.9333] |
+| rep | features | model | leave-one-session-out acc [Wilson 95 %] | per fold | within-session time-blocked | random split |
+|---|---|---|---|---|---|---|
+| A | cop | lda | 0.5714 [0.5060, 0.6345] (128/224) | 0.6106 / 0.5315 | 0.6667 [0.5642, 0.7555] (60/90) | 0.6306 [0.5556, 0.7000] |
+| A | cop | qda | 0.6071 [0.5419, 0.6688] (136/224) **(headline)** | 0.6195 / 0.5946 | 0.6667 [0.5642, 0.7555] (60/90) | 0.6272 [0.5444, 0.7000] |
+| A | cop | lr | 0.5714 [0.5060, 0.6345] (128/224) | 0.6195 / 0.5225 | 0.6778 [0.5757, 0.7653] (61/90) | 0.6289 [0.5444, 0.7000] |
+| A | full | lda | 0.7265 [0.6645, 0.7808] (162/223) (1 excl.) | 0.7965 / 0.6545 | 0.7667 [0.6695, 0.8420] (69/90) (1 excl.) | 0.7989 [0.7416, 0.8315] |
+| A | full | qda | 0.7175 [0.6551, 0.7725] (160/223) (1 excl.) | 0.7168 / 0.7182 | 0.7889 [0.6937, 0.8605] (71/90) (1 excl.) | 0.8080 [0.7222, 0.8764] |
+| A | full | lr | 0.7265 [0.6645, 0.7808] (162/223) (1 excl.) | 0.7699 / 0.6818 | 0.8000 [0.7059, 0.8696] (72/90) (1 excl.) | 0.8263 [0.7889, 0.8652] |
+| B | cop | lda | 0.5670 [0.5015, 0.6302] (127/224) | 0.6018 / 0.5315 | 0.6556 [0.5528, 0.7455] (59/90) | 0.6239 [0.5222, 0.6889] |
+| B | cop | qda | 0.5982 [0.5329, 0.6602] (134/224) | 0.6195 / 0.5766 | 0.6667 [0.5642, 0.7555] (60/90) | 0.6211 [0.5556, 0.6889] |
+| B | cop | lr | 0.5714 [0.5060, 0.6345] (128/224) | 0.6195 / 0.5225 | 0.6778 [0.5757, 0.7653] (61/90) | 0.6244 [0.5333, 0.6889] |
+| B | full | lda | 0.7399 [0.6786, 0.7931] (165/223) (1 excl.) | 0.8319 / 0.6455 | 0.8333 [0.7431, 0.8963] (75/90) (1 excl.) | 0.8118 [0.7556, 0.8652] |
+| B | full | qda | 0.6457 [0.5810, 0.7056] (144/223) (1 excl.) | 0.6283 / 0.6636 | 0.8556 [0.7684, 0.9136] (77/90) (1 excl.) | 0.8074 [0.7444, 0.8652] |
+| B | full | lr | 0.7578 [0.6976, 0.8094] (169/223) (1 excl.) | 0.8407 / 0.6727 | 0.8333 [0.7431, 0.8963] (75/90) (1 excl.) | 0.8324 [0.7889, 0.8764] |
+| C | cop | lda | 0.5893 [0.5239, 0.6517] (132/224) | 0.6195 / 0.5586 | 0.6333 [0.5302, 0.7255] (57/90) | 0.6194 [0.5222, 0.6667] |
+| C | cop | qda | 0.5982 [0.5329, 0.6602] (134/224) | 0.6372 / 0.5586 | 0.6778 [0.5757, 0.7653] (61/90) | 0.6217 [0.5333, 0.6667] |
+| C | cop | lr | 0.5804 [0.5149, 0.6431] (130/224) | 0.6195 / 0.5405 | 0.6667 [0.5642, 0.7555] (60/90) | 0.6267 [0.5222, 0.6667] |
+| C | full | lda | 0.7399 [0.6786, 0.7931] (165/223) (1 excl.) | 0.8142 / 0.6636 | 0.8222 [0.7306, 0.8875] (74/90) (1 excl.) | 0.8062 [0.7444, 0.8539] |
+| C | full | qda | 0.6682 [0.6040, 0.7267] (149/223) (1 excl.) | 0.6460 / 0.6909 | 0.8333 [0.7431, 0.8963] (75/90) (1 excl.) | 0.8107 [0.7444, 0.8764] |
+| C | full | lr | 0.7534 [0.6928, 0.8053] (168/223) (1 excl.) | 0.8319 / 0.6727 | 0.8333 [0.7431, 0.8963] (75/90) (1 excl.) | 0.8296 [0.7978, 0.8764] |
+
+"excl." counts stances left out of that cell because a feature is not finite: `shuffle_03` stance at frame 0 (loading_rate_cps). `loading_rate_cps` is undefined when the peak is the first frame of the stance, which a capture that starts mid-contact produces; the stance stays in every cell whose features are finite.
 
 ### Headline
 
-Rule, fixed before any result was seen: CoP-only features; among LDA and QDA under A, B and C, the cell with the best block-CV accuracy; ties go to raw counts and to LDA. That is **B (conductance), cop, QDA**: time-blocked accuracy **0.6444** [0.4984, 0.7678] (29/45) against a test floor of 0.4222; block-CV 0.6372 (folds 0.565, 0.609, 0.696, 0.591, 0.727); random split 0.6433 [0.5556, 0.7333]. The gap between the random-split mean and the time-blocked number is the optimism that temporal adjacency buys on this data: -0.0011.
+Rule, fixed before any result was seen: CoP-only features; among LDA and QDA under A, B and C, the cell with the best pooled leave-one-session-out accuracy; ties go to raw counts and to LDA. That is **A (raw), cop, QDA**: leave-one-session-out accuracy **0.6071** [0.5419, 0.6688] (136/224) against a majority floor of 0.4152; per fold 0.6195 [0.5274, 0.7037] (70/113) holding out `fast02`, `shuffle02`, `walk02`, 0.5946 [0.5016, 0.6813] (66/111) holding out `fast_03`, `shuffle_03`, `walk_03`; within-session time-blocked 0.6667 [0.5642, 0.7555] (60/90); random split 0.6272 [0.5444, 0.7000]. The selection metric and the reported metric are the same number here, picked among six cells, so the headline carries that much selection optimism. The gap between the within-session number and the leave-one-session-out number is what a session boundary costs on this data: +0.0595.
 
-With a one-stance guard band between the training and test blocks (training loses its last stance per class) the same cell scores 0.6222 [0.4763, 0.7489] (28/45).
+The persisted models `models/model_lda_real.json` and `models/model_qda_real.json` are fitted under **B (conductance)**, the shipped representation, not under the rule's A: `infer_live.py` feeds B on every source and refuses a model fitted on anything else, and switching the shipped representation would move the sim bake-off, the sim-trained models and the streaming path with it. Under B the same cell scores 0.5982 [0.5329, 0.6602] (134/224), 2 stance(s) apart from the headline; that is the deployed model's number.
 
-The best full-feature cell is B full lr at 0.9111 [0.7927, 0.9649] (41/45) (block-CV 0.8584). It is the better classifier of these activities and it is reported here as such, but it rides on `contact_time_s` and its relatives, whose class medians on this data are fast 0.79 s, shuffle 1.40 s, walk 1.18 s, i.e. on cadence; it is not comparable with the sim bake-off and does not test the CoP features.
+The best full-feature cell is B full lr at 0.7578 [0.6976, 0.8094] (169/223) (1 excl.) (within-session 0.8333 [0.7431, 0.8963] (75/90) (1 excl.)). It is the better classifier of these activities and it is reported here as such, but it rides on `contact_time_s` and its relatives, whose class medians on this data are fast 0.80 s, shuffle 1.27 s, walk 1.22 s, i.e. on cadence; it is not comparable with the sim bake-off and does not test the CoP features.
 
-Confusion matrix of the headline cell (rows true, columns predicted, order fast, shuffle, walk):
+Confusion matrix of the headline cell (rows true, columns predicted, order fast, shuffle, walk), pooled over the folds:
 
 | | fast | shuffle | walk | recall |
 |---|---|---|---|---|
-| **fast** | 18 | 1 | 0 | 0.947 |
-| **shuffle** | 1 | 10 | 1 | 0.833 |
-| **walk** | 11 | 2 | 1 | 0.071 |
-| precision | 0.600 | 0.769 | 0.500 | |
+| **fast** | 78 | 10 | 5 | 0.839 |
+| **shuffle** | 13 | 44 | 7 | 0.688 |
+| **walk** | 39 | 14 | 14 | 0.209 |
+| precision | 0.600 | 0.647 | 0.538 | |
 
-Per-class recall fast 0.947, shuffle 0.833, walk 0.071: the headline's accuracy comes from the other classes; walk test stances are called fast 11 times out of 14. The table below shows why a time-blocked split does that -- the training block and the test block of one session are not the same distribution:
+Per-class recall fast 0.839, shuffle 0.688, walk 0.209: walk test stances are called fast 39 times out of 67. The table below shows why a session boundary does that -- the two sessions of one class are not the same distribution:
 
-| feature | class | train block mean | test block mean | shift in test-block sd |
-|---|---|---|---|---|
-| cop_path_len | fast | 0.8674 | 0.9667 | +0.49 |
-| cop_path_len | shuffle | 1.0152 | 0.9667 | -0.19 |
-| cop_path_len | walk | 0.8893 | 0.9861 | +0.35 |
-| cop_displacement | fast | 0.5916 | 0.6267 | +0.50 |
-| cop_displacement | shuffle | 0.3458 | 0.3538 | +0.12 |
-| cop_displacement | walk | 0.4798 | 0.5318 | +0.33 |
+| feature | class | session | n | mean | sd | shift from the class's other session(s), in pooled sd |
+|---|---|---|---|---|---|---|
+| cop_path_len | fast | `fast02` | 48 | 0.8843 | 0.2034 | -1.02 |
+| cop_path_len | fast | `fast_03` | 45 | 1.1368 | 0.2233 | +1.02 |
+| cop_path_len | shuffle | `shuffle02` | 30 | 0.9870 | 0.2110 | +0.34 |
+| cop_path_len | shuffle | `shuffle_03` | 34 | 0.9051 | 0.2581 | -0.34 |
+| cop_path_len | walk | `walk02` | 35 | 0.8913 | 0.2199 | -0.92 |
+| cop_path_len | walk | `walk_03` | 32 | 1.2583 | 0.4579 | +0.92 |
+| cop_displacement | fast | `fast02` | 48 | 0.5940 | 0.1091 | -0.52 |
+| cop_displacement | fast | `fast_03` | 45 | 0.6404 | 0.0551 | +0.52 |
+| cop_displacement | shuffle | `shuffle02` | 30 | 0.3428 | 0.0787 | -0.69 |
+| cop_displacement | shuffle | `shuffle_03` | 34 | 0.4175 | 0.1194 | +0.69 |
+| cop_displacement | walk | `walk02` | 35 | 0.4929 | 0.1852 | -0.63 |
+| cop_displacement | walk | `walk_03` | 32 | 0.5893 | 0.0886 | +0.63 |
 
-McNemar, QDA vs LDA on the same test set: b = 5, c = 2, exact two-sided p = 0.4531; the smallest p attainable at b + c = 7 is 0.0156.
+McNemar, QDA vs LDA on the same test stances: b = 16, c = 8, exact two-sided p = 0.1516; the smallest p attainable at b + c = 24 is 0.0000.
 
 ## 5. Per-class feature distributions (headline cell)
 
-![feature distributions](../figures/real_results/feature_distributions.png)
+![feature distributions](..\figures\real_results\feature_distributions.png)
 
 | feature | class | n | mean | sd | min | median | max |
 |---|---|---|---|---|---|---|---|
-| cop_path_len | fast | 48 | 0.9067 | 0.2123 | 0.3514 | 0.8913 | 1.4477 |
-| cop_path_len | shuffle | 30 | 0.9958 | 0.2218 | 0.5839 | 1.0299 | 1.3719 |
-| cop_path_len | walk | 35 | 0.9280 | 0.2400 | 0.4243 | 0.9147 | 1.7194 |
-| cop_displacement | fast | 48 | 0.6055 | 0.1108 | 0.1333 | 0.6392 | 0.7248 |
-| cop_displacement | shuffle | 30 | 0.3490 | 0.0789 | 0.1481 | 0.3706 | 0.4962 |
-| cop_displacement | walk | 35 | 0.5006 | 0.1905 | 0.0347 | 0.5768 | 0.6727 |
+| cop_path_len | fast | 93 | 1.0065 | 0.2471 | 0.3250 | 0.9522 | 1.5978 |
+| cop_path_len | shuffle | 64 | 0.9435 | 0.2389 | 0.2985 | 0.9146 | 1.3817 |
+| cop_path_len | walk | 67 | 1.0666 | 0.3969 | 0.2055 | 0.9912 | 2.9945 |
+| cop_displacement | fast | 93 | 0.6165 | 0.0899 | 0.1226 | 0.6358 | 0.7354 |
+| cop_displacement | shuffle | 64 | 0.3825 | 0.1083 | 0.0745 | 0.3964 | 0.5590 |
+| cop_displacement | walk | 67 | 0.5389 | 0.1540 | 0.0362 | 0.5920 | 0.6970 |
 
-Fraction of each class's stances (all of them) that fall inside another class's p10–p90 training band, per feature. High values are the overlap the classifier cannot resolve:
+Fraction of each class's stances (all of them) that fall inside another class's p10–p90 band (all sessions), per feature. High values are the overlap the classifier cannot resolve:
 
 | feature | class | inside fast band | inside shuffle band | inside walk band |
 |---|---|---|---|---|
-| cop_path_len | fast | — | 0.67 | 0.73 |
-| cop_path_len | shuffle | 0.67 | — | 0.67 |
-| cop_path_len | walk | 0.80 | 0.69 | — |
-| cop_displacement | fast | — | 0.04 | 0.65 |
-| cop_displacement | shuffle | 0.10 | — | 1.00 |
-| cop_displacement | walk | 0.77 | 0.06 | — |
+| cop_path_len | fast | — | 0.75 | 0.88 |
+| cop_path_len | shuffle | 0.83 | — | 0.86 |
+| cop_path_len | walk | 0.69 | 0.69 | — |
+| cop_displacement | fast | — | 0.08 | 0.56 |
+| cop_displacement | shuffle | 0.05 | — | 0.77 |
+| cop_displacement | walk | 0.70 | 0.12 | — |
 
 ## 6. Every misclassified test stance
 
+Every stance was tested once, out of its own session, so this is every stance the headline cell gets wrong anywhere in the data.
+
 | session | onset (s) | true | predicted | cop_path_len | cop_displacement | contact_time_s | s4 = 0 frames |
 |---|---|---|---|---|---|---|---|
-| fast02 | 45.31 | fast | shuffle | 1.2739 | 0.5022 | 0.87 | 23% |
-| shuffle02 | 37.85 | shuffle | walk | 0.6004 | 0.2969 | 1.32 | 22% |
-| shuffle02 | 59.04 | shuffle | fast | 0.5839 | 0.3706 | 0.95 | 14% |
-| walk02 | 35.58 | walk | shuffle | 1.0315 | 0.1596 | 1.16 | 4% |
-| walk02 | 37.44 | walk | fast | 0.7163 | 0.6351 | 1.23 | 42% |
-| walk02 | 39.26 | walk | fast | 0.9928 | 0.6431 | 1.16 | 15% |
-| walk02 | 40.97 | walk | fast | 0.9621 | 0.4888 | 1.34 | 33% |
-| walk02 | 42.73 | walk | fast | 0.9278 | 0.4617 | 1.35 | 33% |
-| walk02 | 44.55 | walk | fast | 0.9026 | 0.6339 | 1.31 | 49% |
-| walk02 | 46.36 | walk | fast | 1.1428 | 0.6273 | 1.36 | 18% |
-| walk02 | 48.35 | walk | fast | 1.1412 | 0.6222 | 1.16 | 21% |
-| walk02 | 50.20 | walk | fast | 0.8948 | 0.5436 | 1.16 | 26% |
-| walk02 | 51.97 | walk | fast | 0.9289 | 0.6583 | 1.31 | 15% |
-| walk02 | 53.83 | walk | fast | 1.0501 | 0.6727 | 1.29 | 15% |
-| walk02 | 55.68 | walk | shuffle | 1.7194 | 0.5367 | 1.21 | 20% |
-| walk02 | 57.40 | walk | fast | 0.9709 | 0.5454 | 1.28 | 37% |
+| walk02 | 0.00 | walk | shuffle | 0.6038 | 0.1143 | 0.83 | 99% |
+| walk02 | 1.35 | walk | fast | 0.8911 | 0.5720 | 1.05 | 44% |
+| walk02 | 4.50 | walk | fast | 1.3342 | 0.6373 | 1.02 | 18% |
+| walk02 | 6.00 | walk | fast | 0.7009 | 0.6390 | 1.02 | 29% |
+| walk02 | 7.65 | walk | shuffle | 1.1423 | 0.0362 | 1.08 | 28% |
+| walk02 | 9.35 | walk | shuffle | 0.6981 | 0.4291 | 1.02 | 24% |
+| walk02 | 10.87 | walk | shuffle | 0.9030 | 0.3576 | 1.18 | 21% |
+| walk02 | 12.56 | walk | shuffle | 0.6536 | 0.1086 | 1.28 | 10% |
+| walk02 | 14.38 | walk | fast | 0.8262 | 0.6260 | 1.14 | 56% |
+| walk02 | 16.03 | walk | shuffle | 0.7536 | 0.3931 | 1.24 | 35% |
+| walk02 | 17.70 | walk | fast | 0.7139 | 0.6446 | 1.36 | 61% |
+| walk02 | 19.54 | walk | fast | 0.7488 | 0.6258 | 1.13 | 27% |
+| walk02 | 21.21 | walk | fast | 0.9113 | 0.5860 | 1.22 | 33% |
+| walk02 | 22.95 | walk | shuffle | 0.8921 | 0.1261 | 1.16 | 28% |
+| walk02 | 24.73 | walk | fast | 0.8832 | 0.5682 | 1.10 | 32% |
+| walk02 | 26.39 | walk | fast | 0.7030 | 0.6295 | 1.16 | 30% |
+| walk02 | 28.10 | walk | fast | 1.1567 | 0.6081 | 1.33 | 77% |
+| walk02 | 29.93 | walk | shuffle | 0.9442 | 0.4991 | 1.43 | 32% |
+| walk02 | 31.91 | walk | fast | 0.7440 | 0.5955 | 1.20 | 21% |
+| walk02 | 33.68 | walk | fast | 1.0507 | 0.5674 | 1.31 | 23% |
+| walk02 | 35.58 | walk | shuffle | 0.9875 | 0.1572 | 1.16 | 4% |
+| walk02 | 37.44 | walk | fast | 0.6839 | 0.6221 | 1.23 | 42% |
+| walk02 | 39.26 | walk | fast | 0.9436 | 0.6306 | 1.16 | 15% |
+| walk02 | 40.97 | walk | shuffle | 0.9305 | 0.4887 | 1.34 | 33% |
+| walk02 | 42.73 | walk | shuffle | 0.9133 | 0.4596 | 1.35 | 33% |
+| walk02 | 44.55 | walk | fast | 0.8683 | 0.6220 | 1.31 | 49% |
+| walk02 | 46.36 | walk | fast | 1.1064 | 0.6149 | 1.36 | 18% |
+| walk02 | 48.35 | walk | fast | 1.0862 | 0.6101 | 1.16 | 21% |
+| walk02 | 51.97 | walk | fast | 0.8934 | 0.6458 | 1.31 | 15% |
+| walk02 | 53.83 | walk | fast | 1.0136 | 0.6604 | 1.29 | 15% |
+| walk02 | 57.40 | walk | shuffle | 0.9156 | 0.5406 | 1.28 | 37% |
+| walk02 | 59.14 | walk | shuffle | 0.4278 | 0.2187 | 0.85 | 31% |
+| fast02 | 0.24 | fast | shuffle | 0.8184 | 0.4235 | 0.91 | 10% |
+| fast02 | 7.82 | fast | shuffle | 0.7032 | 0.3701 | 0.81 | 16% |
+| fast02 | 13.89 | fast | walk | 0.6636 | 0.5893 | 0.75 | 34% |
+| fast02 | 16.23 | fast | shuffle | 0.6572 | 0.3200 | 0.71 | 21% |
+| fast02 | 19.82 | fast | shuffle | 0.9522 | 0.4241 | 0.92 | 28% |
+| fast02 | 22.52 | fast | walk | 0.6541 | 0.5863 | 0.86 | 23% |
+| fast02 | 23.86 | fast | shuffle | 0.3250 | 0.1226 | 0.93 | 1% |
+| fast02 | 37.80 | fast | shuffle | 1.0802 | 0.5275 | 0.82 | 34% |
+| fast02 | 41.58 | fast | shuffle | 0.6025 | 0.4711 | 0.74 | 27% |
+| fast02 | 45.31 | fast | shuffle | 1.2238 | 0.5019 | 0.87 | 23% |
+| fast02 | 57.69 | fast | shuffle | 0.9471 | 0.5180 | 0.77 | 38% |
+| walk_03 | 3.53 | walk | fast | 1.0762 | 0.5905 | 1.22 | 32% |
+| walk_03 | 5.26 | walk | fast | 1.1140 | 0.5636 | 1.35 | 36% |
+| walk_03 | 7.35 | walk | fast | 1.1123 | 0.6885 | 1.14 | 25% |
+| walk_03 | 9.09 | walk | fast | 1.0934 | 0.6444 | 1.41 | 38% |
+| walk_03 | 11.23 | walk | fast | 0.7279 | 0.6463 | 1.19 | 42% |
+| walk_03 | 12.97 | walk | fast | 1.1767 | 0.5738 | 1.20 | 37% |
+| walk_03 | 16.75 | walk | fast | 1.2247 | 0.6599 | 1.51 | 67% |
+| walk_03 | 24.54 | walk | fast | 0.9912 | 0.6355 | 1.22 | 55% |
+| walk_03 | 26.41 | walk | fast | 1.1533 | 0.5229 | 1.09 | 50% |
+| walk_03 | 28.28 | walk | fast | 0.8016 | 0.6748 | 1.35 | 23% |
+| walk_03 | 30.10 | walk | fast | 1.4800 | 0.6402 | 1.17 | 34% |
+| walk_03 | 31.89 | walk | fast | 1.3165 | 0.6232 | 1.21 | 30% |
+| walk_03 | 37.31 | walk | fast | 0.9254 | 0.5969 | 1.36 | 31% |
+| walk_03 | 39.16 | walk | fast | 1.2835 | 0.6210 | 1.07 | 27% |
+| walk_03 | 40.85 | walk | fast | 1.0846 | 0.6970 | 1.35 | 60% |
+| walk_03 | 42.97 | walk | fast | 1.3241 | 0.6062 | 1.24 | 14% |
+| walk_03 | 44.92 | walk | fast | 0.9798 | 0.6392 | 1.23 | 46% |
+| walk_03 | 50.32 | walk | shuffle | 1.3919 | 0.4892 | 1.28 | 34% |
+| walk_03 | 52.11 | walk | fast | 1.0934 | 0.5819 | 1.18 | 27% |
+| walk_03 | 56.01 | walk | fast | 1.1605 | 0.5916 | 1.28 | 24% |
+| walk_03 | 57.93 | walk | fast | 0.8929 | 0.6345 | 1.10 | 21% |
+| fast_03 | 0.00 | fast | shuffle | 0.8280 | 0.3665 | 0.34 | 6% |
+| fast_03 | 3.52 | fast | walk | 1.5476 | 0.6217 | 1.01 | 44% |
+| fast_03 | 15.09 | fast | walk | 1.5511 | 0.5590 | 1.11 | 27% |
+| fast_03 | 16.63 | fast | walk | 1.5978 | 0.6039 | 1.01 | 30% |
+| shuffle_03 | 0.00 | shuffle | walk | 0.2985 | 0.2204 | 0.37 | 13% |
+| shuffle_03 | 2.76 | shuffle | walk | 0.6583 | 0.1952 | 1.19 | 8% |
+| shuffle_03 | 6.37 | shuffle | fast | 1.0405 | 0.5180 | 1.19 | 13% |
+| shuffle_03 | 8.16 | shuffle | walk | 1.0932 | 0.4998 | 1.11 | 13% |
+| shuffle_03 | 9.94 | shuffle | fast | 0.7861 | 0.4466 | 1.13 | 15% |
+| shuffle_03 | 13.75 | shuffle | fast | 0.6911 | 0.4798 | 1.22 | 15% |
+| shuffle_03 | 19.42 | shuffle | fast | 0.8325 | 0.5075 | 1.25 | 13% |
+| shuffle_03 | 21.36 | shuffle | fast | 1.0730 | 0.5567 | 1.20 | 30% |
+| shuffle_03 | 23.23 | shuffle | fast | 0.9073 | 0.4869 | 1.38 | 23% |
+| shuffle_03 | 25.40 | shuffle | fast | 0.8356 | 0.4738 | 1.31 | 27% |
+| shuffle_03 | 31.17 | shuffle | walk | 1.3806 | 0.5125 | 1.22 | 18% |
+| shuffle_03 | 34.81 | shuffle | walk | 1.1569 | 0.5187 | 1.21 | 21% |
+| shuffle_03 | 42.22 | shuffle | fast | 0.6744 | 0.4494 | 1.14 | 16% |
+| shuffle_03 | 45.63 | shuffle | walk | 1.3817 | 0.5399 | 1.15 | 16% |
+| shuffle_03 | 49.22 | shuffle | fast | 1.0131 | 0.5013 | 1.20 | 19% |
+| shuffle_03 | 50.94 | shuffle | fast | 0.9612 | 0.5046 | 1.06 | 19% |
+| shuffle_03 | 52.62 | shuffle | fast | 0.7673 | 0.4899 | 1.11 | 12% |
+| shuffle_03 | 56.26 | shuffle | fast | 0.8060 | 0.5590 | 1.06 | 9% |
+| shuffle_03 | 57.93 | shuffle | fast | 0.9175 | 0.4902 | 0.97 | 29% |
+| shuffle_03 | 59.52 | shuffle | walk | 0.3528 | 0.0745 | 0.48 | 8% |
 
-### fast → shuffle (1)
+### walk → shuffle (14)
 
-![fast to shuffle](../figures/real_results/errors_fast_to_shuffle.png)
+![walk to shuffle](..\figures\real_results\errors_walk_to_shuffle.png)
 
-Measured: `cop_path_len` averages 1.2739 over these stances against training means 0.8674 (fast) and 1.0152 (shuffle), nearer to shuffle; `cop_displacement` averages 0.5022 over these stances against training means 0.5916 (fast) and 0.3458 (shuffle), nearer to fast; s4 read 0 on 23% of their frames against 32% for fast and 27% for shuffle in training; on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 16.3 mm for fast; their contact time averages 0.87 s against class medians 0.79 s (fast) and 1.40 s (shuffle), which the CoP-only cell never sees.
+Measured: `cop_path_len` averages 0.8684 over these stances against class means over all sessions 1.0666 (walk) and 0.9435 (shuffle), nearer to shuffle; `cop_displacement` averages 0.3156 over these stances against class means over all sessions 0.5389 (walk) and 0.3825 (shuffle), nearer to shuffle; s4 read 0 on 32% of their frames against 35% for walk and 20% for shuffle (class means over all sessions); on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 11.8 mm for walk; their contact time averages 1.18 s against class medians 1.22 s (walk) and 1.27 s (shuffle), which the CoP-only cell never sees.
 
-### shuffle → walk (1)
+### walk → fast (39)
 
-![shuffle to walk](../figures/real_results/errors_shuffle_to_walk.png)
+![walk to fast](..\figures\real_results\errors_walk_to_fast.png)
 
-Measured: `cop_path_len` averages 0.6004 over these stances against training means 1.0152 (shuffle) and 0.8893 (walk), nearer to walk; `cop_displacement` averages 0.2969 over these stances against training means 0.3458 (shuffle) and 0.4798 (walk), nearer to shuffle; s4 read 0 on 22% of their frames against 27% for shuffle and 36% for walk in training; on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 19.2 mm for shuffle; their contact time averages 1.32 s against class medians 1.40 s (shuffle) and 1.18 s (walk), which the CoP-only cell never sees.
+Measured: `cop_path_len` averages 1.0070 over these stances against class means over all sessions 1.0666 (walk) and 1.0065 (fast), nearer to fast; `cop_displacement` averages 0.6189 over these stances against class means over all sessions 0.5389 (walk) and 0.6165 (fast), nearer to fast; s4 read 0 on 34% of their frames against 35% for walk and 32% for fast (class means over all sessions); on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 11.8 mm for walk; their contact time averages 1.22 s against class medians 1.22 s (walk) and 0.80 s (fast), which the CoP-only cell never sees.
 
-### shuffle → fast (1)
+### fast → shuffle (10)
 
-![shuffle to fast](../figures/real_results/errors_shuffle_to_fast.png)
+![fast to shuffle](..\figures\real_results\errors_fast_to_shuffle.png)
 
-Measured: `cop_path_len` averages 0.5839 over these stances against training means 1.0152 (shuffle) and 0.8674 (fast), nearer to fast; `cop_displacement` averages 0.3706 over these stances against training means 0.3458 (shuffle) and 0.5916 (fast), nearer to shuffle; s4 read 0 on 14% of their frames against 27% for shuffle and 32% for fast in training; on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 19.2 mm for shuffle; their contact time averages 0.95 s against class medians 1.40 s (shuffle) and 0.79 s (fast), which the CoP-only cell never sees.
+Measured: `cop_path_len` averages 0.8138 over these stances against class means over all sessions 1.0065 (fast) and 0.9435 (shuffle), nearer to shuffle; `cop_displacement` averages 0.4045 over these stances against class means over all sessions 0.6165 (fast) and 0.3825 (shuffle), nearer to shuffle; s4 read 0 on 20% of their frames against 32% for fast and 20% for shuffle (class means over all sessions); on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 11.8 mm for fast; their contact time averages 0.78 s against class medians 0.80 s (fast) and 1.27 s (shuffle), which the CoP-only cell never sees.
 
-### walk → shuffle (2)
+### fast → walk (5)
 
-![walk to shuffle](../figures/real_results/errors_walk_to_shuffle.png)
+![fast to walk](..\figures\real_results\errors_fast_to_walk.png)
 
-Measured: `cop_path_len` averages 1.3755 over these stances against training means 0.8893 (walk) and 1.0152 (shuffle), nearer to shuffle; `cop_displacement` averages 0.3481 over these stances against training means 0.4798 (walk) and 0.3458 (shuffle), nearer to shuffle; s4 read 0 on 12% of their frames against 36% for walk and 27% for shuffle in training; on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 16.2 mm for walk; their contact time averages 1.19 s against class medians 1.18 s (walk) and 1.40 s (shuffle), which the CoP-only cell never sees.
+Measured: `cop_path_len` averages 1.2029 over these stances against class means over all sessions 1.0065 (fast) and 1.0666 (walk), nearer to walk; `cop_displacement` averages 0.5920 over these stances against class means over all sessions 0.6165 (fast) and 0.5389 (walk), nearer to fast; s4 read 0 on 32% of their frames against 32% for fast and 35% for walk (class means over all sessions); on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 11.8 mm for fast; their contact time averages 0.95 s against class medians 0.80 s (fast) and 1.22 s (walk), which the CoP-only cell never sees.
 
-### walk → fast (11)
+### shuffle → walk (7)
 
-![walk to fast](../figures/real_results/errors_walk_to_fast.png)
+![shuffle to walk](..\figures\real_results\errors_shuffle_to_walk.png)
 
-Measured: `cop_path_len` averages 0.9664 over these stances against training means 0.8893 (walk) and 0.8674 (fast), nearer to walk; `cop_displacement` averages 0.5938 over these stances against training means 0.4798 (walk) and 0.5916 (fast), nearer to fast; s4 read 0 on 28% of their frames against 36% for walk and 32% for fast in training; on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 16.2 mm for walk; their contact time averages 1.27 s against class medians 1.18 s (walk) and 0.79 s (fast), which the CoP-only cell never sees.
+Measured: `cop_path_len` averages 0.9032 over these stances against class means over all sessions 0.9435 (shuffle) and 1.0666 (walk), nearer to shuffle; `cop_displacement` averages 0.3659 over these stances against class means over all sessions 0.3825 (shuffle) and 0.5389 (walk), nearer to shuffle; s4 read 0 on 14% of their frames against 20% for shuffle and 35% for walk (class means over all sessions); on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 14.5 mm for shuffle; their contact time averages 0.96 s against class medians 1.27 s (shuffle) and 1.22 s (walk), which the CoP-only cell never sees.
+
+### shuffle → fast (13)
+
+![shuffle to fast](..\figures\real_results\errors_shuffle_to_fast.png)
+
+Measured: `cop_path_len` averages 0.8697 over these stances against class means over all sessions 0.9435 (shuffle) and 1.0065 (fast), nearer to shuffle; `cop_displacement` averages 0.4972 over these stances against class means over all sessions 0.3825 (shuffle) and 0.6165 (fast), nearer to shuffle; s4 read 0 on 18% of their frames against 20% for shuffle and 32% for fast (class means over all sessions); on those frames the CoP is a five-sensor centroid, and the counterfactual below puts that at 14.5 mm for shuffle; their contact time averages 1.17 s against class medians 1.27 s (shuffle) and 0.80 s (fast), which the CoP-only cell never sees.
 
 ## 7. Mechanisms, measured
 
 | class | s4 = 0 inside stances | CoP shift on s4-zero frames (mm) | CoP shift A → C, all stance frames (mean / median mm) | stance-to-stance ML spread sd (mm) |
 |---|---|---|---|---|
-| fast | 32.5% | 16.3 | 3.41 / 3.28 | 2.52 |
-| shuffle | 24.3% | 19.2 | 3.23 / 3.32 | 2.33 |
-| walk | 32.0% | 16.2 | 3.06 / 3.06 | 2.64 |
+| fast | 31.9% | 11.8 | 3.62 / 3.36 | 2.28 |
+| shuffle | 19.8% | 14.5 | 3.33 / 3.33 | 2.12 |
+| walk | 35.1% | 11.8 | 3.44 / 3.26 | 2.67 |
 
-**s4 zeros.** s4 (1st metatarsal head) has the highest activation threshold of the six, so its zeros are below-threshold readings, never imputed. On the frames inside kept stances it reads 0 on 33% (fast), 32% (walk) and 24% (shuffle) of frames. The CoP shift those zeros are responsible for is measured directly: on every such frame the CoP is recomputed with s4 set to the median non-zero s4 count across the four captures (513 counts) and the difference taken -- 16.3 / 16.2 / 19.2 mm for fast / walk / shuffle, on a 91 mm wide insole.
+**s4 zeros.** s4 (1st metatarsal head) has the highest activation threshold of the six, so its zeros are below-threshold readings, never imputed. On the frames inside kept stances it reads 0 on 32% (fast), 35% (walk) and 20% (shuffle) of frames. The CoP shift those zeros are responsible for is measured directly: on every such frame the CoP is recomputed with s4 set to the median non-zero s4 count across the captures (343 counts) and the difference taken -- 11.8 / 11.8 / 14.5 mm for fast / walk / shuffle, on a 91 mm wide insole.
 
-**Gain match.** Replacing raw counts by gain-matched conductance moves the per-frame CoP by 3.41 / 3.06 / 3.23 mm on average (fast / walk / shuffle), i.e. the s4-zero effect is 5× the gain-match effect on walk. The CoP-only QDA scores 0.6444 under A, 0.6444 under B and 0.6444 under C on the time-blocked test (block-CV 0.6195 / 0.6372 / 0.6283): the representation moves the answer by at most 0 test stance(s). Whatever the representation, the same frames carry the same s4 zeros and the same 62–67 % extrapolation above 824 counts.
+**Gain match.** Replacing raw counts by gain-matched conductance moves the per-frame CoP by 3.62 / 3.44 / 3.33 mm on average (fast / walk / shuffle), i.e. the s4-zero effect is 3× the gain-match effect on walk. The CoP-only QDA scores 0.6071 under A, 0.5982 under B and 0.5982 under C on the leave-one-session-out split (within-session 0.6667 / 0.6667 / 0.6778): the representation moves the answer by at most 2 test stance(s) in 224. Whatever the representation, the same frames carry the same s4 zeros and the same extrapolation above 824 counts.
 
-**Figure-8 turning.** The stance-to-stance spread of the mean medial-lateral CoP position is 2.64 / 2.52 / 2.33 mm (sd; walk / fast / shuffle). Against the ±15 mm uncertainty on the sensor coordinates this is not resolvable, so turning remains a hypothesis, as `docs/sim_vs_real.md` D4b concluded.
+**Figure-8 turning.** The stance-to-stance spread of the mean medial-lateral CoP position is 2.67 / 2.28 / 2.12 mm (sd; walk / fast / shuffle). Against the ±15 mm uncertainty on the sensor coordinates this is not resolvable, so turning remains a hypothesis, as `docs/sim_vs_real.md` D4b concluded.
 
 ## 8. Peak force against onset time
 
-![peak vs onset](../figures/real_results/peak_vs_onset.png)
+![peak vs onset](..\figures\real_results\peak_vs_onset.png)
 
 | class | slope (raw counts per s of capture) | r | p |
 |---|---|---|---|
-| fast | +3.17 | +0.226 | 0.122 |
-| shuffle | -3.99 | -0.208 | 0.270 |
-| walk | +3.02 | +0.129 | 0.459 |
+| fast | +3.92 | +0.276 | 0.007 |
+| shuffle | -4.66 | -0.197 | 0.119 |
+| walk | +1.52 | +0.061 | 0.626 |
+
+Onset time is seconds into each session's own capture, so sessions of one class overlay on the x axis.
 
 No class shows a significant decline of peak force over its 60 s capture at p < 0.05. That is not evidence against FSR stress relaxation -- the bench measurement was under constant load, and gait loads each sensor for a fraction of a second at a time -- it says the drift does not visibly enter one minute of walking.
 
 ## 9. Simulator versus real
 
-The sim-trained deployment models (`models/model_lda.json`, `models/model_qda.json`, fitted on 12 simulated sessions by `scripts/fit_model.py`) applied to the same 113 real stances under the representation they were fitted on (B): LDA 0.3097 (35/113), QDA 0.2566 (29/113), below the 0.4248 majority floor -- the expected outcome for a model fitted on a generator whose constants were co-evolved with the detector. The same recipe retrained on real stances scores 0.6444 [0.4984, 0.7678] on the time-blocked test, and the sim bake-off's 0.9296 on 270 held-out simulated stances (`docs/bakeoff.md`) is not a number this data can reproduce or refute: different stances, different split, different world.
+The sim-trained deployment models (`models/model_lda.json`, `models/model_qda.json`, fitted on 12 simulated sessions by `scripts/fit_model.py`) applied to the same 224 real stances under the representation they were fitted on (B): LDA 0.3795 (85/224), QDA 0.3438 (77/224), below the 0.4152 majority floor -- the expected outcome for a model fitted on a generator whose constants were co-evolved with the detector. The same recipe retrained on real stances scores 0.6071 [0.5419, 0.6688] leave-one-session-out (the shipped B model 0.5982 [0.5329, 0.6602]), and the sim bake-off's 0.9296 on 270 held-out simulated stances (`docs/bakeoff.md`) is not a number this data can reproduce or refute: different stances, different split, different world.
 
 ## 10. Split verdict: what more data fixes, what the hardware cannot
 
 More data would fix:
 
-- **Per-session generalisation.** One session per class means every number here is within-session. A second session per class flips this script to leave-one-session-out automatically.
+- **Sessions.** fast 2, shuffle 2, walk 2 sessions per class is the minimum that makes leave-one-session-out possible; every headline interval here is wide and one odd session moves it a lot. More sessions narrow it; they do not change what it measures.
 - **Subjects.** One subject. Nothing here says anything about another foot.
 - **Path.** Everything was walked on a figure-8 in a small space; straight-line gait and its symmetric loading are unmeasured.
-- **Cadence range.** Fast and walk are separated by contact time (0.79 vs 1.18 s median); intermediate cadences would blur that boundary and the CoP features would have to carry it.
+- **Cadence range.** Fast and walk are separated by contact time (0.80 vs 1.22 s median); intermediate cadences would blur that boundary and the CoP features would have to carry it.
 
 Six-sensor hardware limits that data will not fix:
 
-- **s4's activation threshold** turns the CoP into a five-sensor centroid on 24%–33% of stance frames, with a 16–19 mm shift.
+- **s4's activation threshold** turns the CoP into a five-sensor centroid on 20%–35% of stance frames, with a 12–14 mm shift.
 - **±15 mm sensor coordinates** on a 91 mm wide insole: every CoP distance inherits it.
 - **The gain match extrapolates** above 824 counts and does not hold below ~5 N.
 - **No spatial resolution between sensors**: the CoP is a weighted mean of six points; anything between them is interpolation.

@@ -5,7 +5,7 @@ insole/splits.py and scripts/train_real.py. Run from the repo root:
 
 Predictions, written before the first run
 -----------------------------------------
-splits       the time-blocked split of the 113 real stances has no train/test
+splits       the time-blocked split of the 113 `_02` stances has no train/test
              overlap, every test stance starts after every training stance
              of its class, and the sizes are walk 21/14, fast 29/19,
              shuffle 18/12 (n_test 45); with guard=1 training loses one
@@ -13,6 +13,15 @@ splits       the time-blocked split of the 113 real stances has no train/test
              folds test every stance exactly once, and each held-out block is
              a contiguous run in onset order. The random split keeps the
              per-class sizes and is a permutation of the same indices.
+loso         on the 224 stances of the `_02` and `_03` sets,
+             leave_one_session_out gives two folds, every stance is tested
+             exactly once, no session sits on both sides of a fold, fold 0
+             tests the `_02` set (fast 48, shuffle 30, walk 35) and fold 1
+             the `_03` set (fast 45, shuffle 34, walk 32). The time-blocked
+             split groups per (class, session), so on the same frame its
+             sizes are the per-session sizes summed: fast 56/37, shuffle
+             38/26, walk 40/27, and inside every (class, session) every test
+             stance starts after every training stance.
 identity     representation C with identity gains equals B exactly (bit for
              bit) on a sim fixture and on walk02; A is the frame unchanged.
 sim numbers  the SHIPPED representation on the 12 simulated sessions
@@ -24,11 +33,21 @@ sim numbers  the SHIPPED representation on the 12 simulated sessions
              0.9296, the figure the bake-off carried before stage 20 switched
              the shipped representation to conductance.
 script       scripts/train_real.py runs end to end into a temporary output
-             set, exits 0, writes the document, at least the two headline
-             figures and both real models, and the document's stance counts
-             are 35/48/30.
+             set, exits 0, writes the document with every pinned stance count
+             (stand 0 / walk 35 / fast 48 / shuffle 30 for `_02`, 0 / 32 /
+             45 / 34 for `_03`), names one headline cell, states the split
+             the data on disk allows (leave-one-session-out once every class
+             has two sessions, the within-session caveat otherwise), writes
+             at least the two headline figures and both real models, and the
+             models' meta lists exactly the sessions on disk and the shipped
+             representation.
+
+Each check_* function prints PASS/FAIL lines and returns (passed, failed);
+the test_* wrapper of the same name asserts nothing failed, so pytest sees a
+failure and the direct run keeps its counts.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -43,16 +62,23 @@ from insole.features import extract_features
 from insole.make_sessions import CLASSES, SESSIONS_PER_CLASS, session_name
 from insole.paths import DATA_REAL, DATA_SIM, REPO
 from insole.representations import SHIPPED, features_under, identity_gains, transform_df
+from insole.splits import (contiguous_block_folds, leave_one_session_out,
+                           random_stance_splits, time_blocked_split)
 
 # Session-disjoint LDA correct counts on the sim bake-off split, per
 # representation: raw counts is the pre-stage-20 figure (docs/bakeoff.md,
 # superseded section); the shipped one is what the doc now states.
 BAKEOFF_LDA_CORRECT = {"raw": 251}
-from insole.splits import (contiguous_block_folds, random_stance_splits,
-                           time_blocked_split)
 
-REAL_FILES = [("walk", "walk02.csv"), ("fast", "fast02.csv"), ("shuffle", "shuffle02.csv")]
+REAL_FILES_02 = [("walk", "walk02.csv"), ("fast", "fast02.csv"), ("shuffle", "shuffle02.csv")]
+REAL_FILES_03 = [("walk", "walk_03.csv"), ("fast", "fast_03.csv"), ("shuffle", "shuffle_03.csv")]
+# (activity, file, frames, stances) as the document's data table prints them.
+PINNED_ROWS = [("stand", "stand_02.csv", 6000, 0), ("walk", "walk02.csv", 6000, 35),
+               ("fast", "fast02.csv", 6000, 48), ("shuffle", "shuffle02.csv", 6000, 30),
+               ("stand", "stand_03.csv", 6001, 0), ("walk", "walk_03.csv", 6001, 32),
+               ("fast", "fast_03.csv", 6001, 45), ("shuffle", "shuffle_03.csv", 6001, 34)]
 COP = ["cop_path_len", "cop_displacement"]
+LABELS = ("walk", "fast", "shuffle")
 
 
 def check(name, condition, detail=""):
@@ -74,9 +100,9 @@ class Tally:
         return self.passed, self.failed
 
 
-def real_frame():
+def real_frame(files=REAL_FILES_02):
     parts = []
-    for label, fname in REAL_FILES:
+    for label, fname in files:
         df = pd.read_csv(os.path.join(DATA_REAL, fname))
         total = df[D.SENSOR_COLS].sum(axis=1).to_numpy(dtype=float)
         st = D.merge_close(D.find_stances(total))
@@ -86,10 +112,22 @@ def real_frame():
     return pd.concat(parts, ignore_index=True)
 
 
+def sessions_on_disk():
+    """{label: [session stems]} for every training-grade moving capture in data/real."""
+    out = {lab: [] for lab in LABELS}
+    for fname in sorted(os.listdir(DATA_REAL)):
+        if not fname.endswith(".csv") or "_01" in fname or "check_all" in fname:
+            continue
+        for lab in LABELS:
+            if fname.startswith(lab):
+                out[lab].append(fname[:-4])
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 1. Splits
 # ---------------------------------------------------------------------------
-def test_splits():
+def check_splits():
     t = Tally()
     fr = real_frame()
     tr, te, pc = time_blocked_split(fr, 0.6, 0)
@@ -128,10 +166,54 @@ def test_splits():
     return t.result()
 
 
+def test_splits():
+    p, f = check_splits()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
 # ---------------------------------------------------------------------------
-# 2. Representations
+# 2. Leave-one-session-out on two sessions per class
 # ---------------------------------------------------------------------------
-def test_identity_gains():
+def check_loso():
+    t = Tally()
+    fr = real_frame(REAL_FILES_02 + REAL_FILES_03)
+    t("two sessions per class: 224 moving stances", len(fr) == 224, f"n={len(fr)}")
+    folds = list(leave_one_session_out(fr))
+    t("LOSO: two folds", len(folds) == 2, f"folds={len(folds)}")
+    tested = np.concatenate([te for _, te, _ in folds])
+    t("LOSO: every stance tested exactly once", sorted(tested) == sorted(fr.index), f"tested={len(tested)}")
+    for tr, te, held in folds:
+        s_tr = set(fr.loc[tr, "session"])
+        s_te = set(fr.loc[te, "session"])
+        t(f"LOSO fold holding out {held}: no session on both sides, test = held out",
+          not (s_tr & s_te) and s_te == set(held) and not (set(tr) & set(te)))
+    pc = [{lab: int((fr.loc[te, "label"] == lab).sum()) for lab in LABELS} for _, te, _ in folds]
+    t("LOSO fold 0 tests the _02 set: fast 48, shuffle 30, walk 35",
+      pc[0] == {"fast": 48, "shuffle": 30, "walk": 35}, str(pc[0]))
+    t("LOSO fold 1 tests the _03 set: fast 45, shuffle 34, walk 32",
+      pc[1] == {"fast": 45, "shuffle": 34, "walk": 32}, str(pc[1]))
+
+    tr, te, pcs = time_blocked_split(fr, 0.6, 0)
+    t("time-blocked on two sessions: per-(class, session) sizes summed, fast 56/37, shuffle 38/26, walk 40/27",
+      pcs == {"fast": (56, 37, 0), "shuffle": (38, 26, 0), "walk": (40, 27, 0)}, str(pcs))
+    ordered = True
+    for (lab, ses), g in fr.groupby(["label", "session"]):
+        a = g.index[g.index.isin(tr)]
+        b = g.index[g.index.isin(te)]
+        ordered &= bool(len(a) and len(b) and fr.loc[a, "start"].max() < fr.loc[b, "start"].min())
+    t("time-blocked: inside every (class, session) every test stance starts after every training stance", ordered)
+    return t.result()
+
+
+def test_loso():
+    p, f = check_loso()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+# ---------------------------------------------------------------------------
+# 3. Representations
+# ---------------------------------------------------------------------------
+def check_identity_gains():
     t = Tally()
     for path in (os.path.join(DATA_SIM, "sim_walk.csv"), os.path.join(DATA_REAL, "walk02.csv")):
         if not os.path.exists(path):
@@ -161,10 +243,15 @@ def test_identity_gains():
     return t.result()
 
 
+def test_identity_gains():
+    p, f = check_identity_gains()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
 # ---------------------------------------------------------------------------
-# 3. Representation A reproduces the sim bake-off frame and number
+# 4. Representation A reproduces the sim bake-off frame and number
 # ---------------------------------------------------------------------------
-def test_sim_reproduction():
+def check_sim_reproduction():
     t = Tally()
     fpath = os.path.join(DATA_SIM, "features_sessions.csv")
     if not os.path.exists(fpath):
@@ -208,46 +295,63 @@ def test_sim_reproduction():
     return t.result()
 
 
+def test_sim_reproduction():
+    p, f = check_sim_reproduction()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
 # ---------------------------------------------------------------------------
-# 4. The script end to end
+# 5. The script end to end
 # ---------------------------------------------------------------------------
-def test_script():
+def check_script():
     t = Tally()
+    on_disk = sessions_on_disk()
+    multi = all(len(v) >= 2 for v in on_disk.values())
     with tempfile.TemporaryDirectory() as tmp:
         doc = os.path.join(tmp, "docs", "real_results.md")
         figs = os.path.join(tmp, "figs")
         models = os.path.join(tmp, "models")
         r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "train_real.py"),
                             "--doc", doc, "--fig-dir", figs, "--models-dir", models],
-                           cwd=REPO, capture_output=True, text=True)
+                           cwd=REPO, capture_output=True, text=True, encoding="utf-8")
         t("scripts/train_real.py exits 0", r.returncode == 0, r.stdout.strip().splitlines()[-1] if r.stdout else r.stderr[-300:])
-        text = open(doc).read() if os.path.exists(doc) else ""
-        t("document written with the pinned stance counts",
-          "| walk | `walk02.csv` | 6000 | 35 |" in text and "| fast | `fast02.csv` | 6000 | 48 |" in text
-          and "| shuffle | `shuffle02.csv` | 6000 | 30 |" in text and "| stand | `stand_02.csv` | 6000 | 0 |" in text)
-        t("document names one headline cell and the split caveat",
-          "**(headline)**" in text and "NOT a per-session split" not in text
-          and "no per-session split exists" in text)
+        text = open(doc, encoding="utf-8").read() if os.path.exists(doc) else ""
+        t("document written with every pinned stance count",
+          all(f"| {lab} | `{f}` | {n} | {k} |" in text for lab, f, n, k in PINNED_ROWS))
+        if multi:
+            t("document names one headline cell and the leave-one-session-out split (two sessions per class on disk)",
+              "**(headline)**" in text and "leave-one-session-out" in text
+              and "no per-session split exists" not in text and "NOT a per-session split" not in text)
+        else:
+            t("document names one headline cell and the within-session caveat (one session per class on disk)",
+              "**(headline)**" in text and "NOT a per-session split" not in text
+              and "no per-session split exists" in text)
         wrote = sorted(os.listdir(figs)) if os.path.isdir(figs) else []
         t("headline figures written", "feature_distributions.png" in wrote and "peak_vs_onset.png" in wrote, str(wrote))
         t("both real models persisted with meta",
           all(os.path.exists(os.path.join(models, f"model_{k}_real.json")) for k in ("lda", "qda")))
         if os.path.exists(os.path.join(models, "model_lda_real.json")):
-            import json
             meta = json.load(open(os.path.join(models, "model_lda_real.json")))["meta"]
-            t("meta records sessions, split, representation, feature set and git hash",
-              set(meta["sessions"]) == {"walk02", "fast02", "shuffle02"} and "split" in meta
-              and meta["representation"] in ("raw", "conductance", "gain_matched")
-              and meta["feature_set"] == "cop" and len(meta["git_hash"]) >= 7, str({k: meta[k] for k in ('representation', 'feature_set', 'git_hash')}))
+            expected = {s for v in on_disk.values() for s in v}
+            t("meta records exactly the sessions on disk, the split, the shipped representation, feature set and git hash",
+              set(meta["sessions"]) == expected and "split" in meta
+              and meta["representation"] == SHIPPED
+              and meta["feature_set"] == "cop" and len(meta["git_hash"]) >= 7,
+              str({k: meta[k] for k in ("sessions", "representation", "feature_set", "git_hash")}))
     return t.result()
 
 
-SUITES = [test_splits, test_identity_gains, test_sim_reproduction, test_script]
+def test_script():
+    p, f = check_script()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+SUITES = [check_splits, check_loso, check_identity_gains, check_sim_reproduction, check_script]
 
 if __name__ == "__main__":
     total_pass = total_fail = 0
     for suite in SUITES:
-        print(f"--- {suite.__name__} ---")
+        print(f"--- {suite.__name__.replace('check_', 'test_', 1)} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f
         print()

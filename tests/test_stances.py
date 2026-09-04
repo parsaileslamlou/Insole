@@ -10,6 +10,10 @@ today's bugs permanently.
 Counts catch fragmentation, annihilation and merging. Nothing catches a
 boundary error automatically, so stance_report is printed on every run to
 keep it at least visible.
+
+Each check_* function prints PASS/FAIL lines and returns (passed, failed);
+the test_* wrapper of the same name asserts nothing failed, so pytest sees a
+failure and the direct run keeps its counts.
 """
 
 import os
@@ -58,7 +62,7 @@ def check(name, condition, detail=""):
     return bool(condition)
 
 
-def test_streams():
+def check_streams():
     passed = failed = 0
     for stem, mode, cycle_s, guards in CASES:
         total = total_force(ensure_csv(stem))
@@ -79,7 +83,12 @@ def test_streams():
     return passed, failed
 
 
-def test_merge_close():
+def test_streams():
+    p, f = check_streams()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def check_merge_close():
     """merge_close as a unit, plus the fragmentation case it exists to fix."""
     passed = failed = 0
 
@@ -109,22 +118,33 @@ def test_merge_close():
     return passed, failed
 
 
+def test_merge_close():
+    p, f = check_merge_close()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
 REAL = str(DATA_REAL)
-# (as-captured filename, stances after find_stances + merge_close)
+# (as-captured filename, stances after find_stances + merge_close). One row per
+# training-grade capture; scripts/train_real.py pins the same counts in
+# SESSIONS and refuses a capture that is not pinned.
 REAL_COUNTS = [("stand_02.csv", 0), ("walk02.csv", 35),
-               ("fast02.csv", 48), ("shuffle02.csv", 30)]
+               ("fast02.csv", 48), ("shuffle02.csv", 30),
+               ("stand_03.csv", 0), ("walk_03.csv", 32),
+               ("fast_03.csv", 45), ("shuffle_03.csv", 34)]
 
 
-def test_real_stance_counts():
-    """Stance counts on the real _02 captures at the committed thresholds.
+def check_real_stance_counts():
+    """Stance counts on the real captures at the committed thresholds.
 
-    Prediction, written before the first run: stand 0, walk 35, fast 48,
-    shuffle 30 (analyze_real.py C5 and sweep_max_duration.py at
-    MAX_DURATION = 200). This is the only test that can see MAX_DURATION: no
-    simulated stance exceeds 60 frames, so every sim fixture above passes at
-    any ceiling from 120 to 1000, while at 120 these four read 0 / 18 / 48 / 2
-    (over-ceiling runs are discarded, not clipped). Four minutes of real data
-    from one subject; a regression fixture, not evidence about generalisation.
+    Prediction for the `_02` set, written before the first run: stand 0, walk
+    35, fast 48, shuffle 30 (analyze_real.py C5 and sweep_max_duration.py at
+    MAX_DURATION = 200). The `_03` set was pinned when it landed: stand 0,
+    walk 32, fast 45, shuffle 34. This is the only test that can see
+    MAX_DURATION: no simulated stance exceeds 60 frames, so every sim fixture
+    above passes at any ceiling from 120 to 1000, while at 120 the `_02` four
+    read 0 / 18 / 48 / 2 (over-ceiling runs are discarded, not clipped). Eight
+    minutes of real data from one subject; a regression fixture, not evidence
+    about generalisation.
     """
     passed = failed = 0
     for fname, want in REAL_COUNTS:
@@ -136,7 +156,12 @@ def test_real_stance_counts():
     return passed, failed
 
 
-def test_true_stances():
+def test_real_stance_counts():
+    p, f = check_real_stance_counts()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def check_true_stances():
     """Guard the cadence bug: truth must scale with cycle_s, in count and width."""
     passed = failed = 0
     for name, kwargs, n, dur in [
@@ -152,11 +177,16 @@ def test_true_stances():
     return passed, failed
 
 
+def test_true_stances():
+    p, f = check_true_stances()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
 if __name__ == "__main__":
     total_pass = total_fail = 0
-    for suite in (test_true_stances, test_merge_close, test_streams,
-                  test_real_stance_counts):
-        print(f"--- {suite.__name__} ---")
+    for suite in (check_true_stances, check_merge_close, check_streams,
+                  check_real_stance_counts):
+        print(f"--- {suite.__name__.replace('check_', 'test_', 1)} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f
         print()

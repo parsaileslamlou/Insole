@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_utc": "2026-09-03T09:45:42Z",
+  "created_utc": "2026-09-04T05:17:27Z",
   "kind": "qda",
   "classes": [
     "fast",
@@ -9,93 +9,124 @@
   ],
   "means": [
     [
-      0.9067140140096122,
-      0.605488033900604
+      1.035831313492097,
+      0.6259369387800274
     ],
     [
-      0.9958103874653,
-      0.3490091803175075
+      0.9577725898910618,
+      0.3873320838755673
     ],
     [
-      0.9280210001488902,
-      0.5005740370946445
+      1.093843618605377,
+      0.5445856983506816
     ]
   ],
   "priors": [
-    0.4247787610619469,
-    0.26548672566371684,
-    0.30973451327433627
+    0.41517857142857145,
+    0.2857142857142857,
+    0.29910714285714285
   ],
   "counts": [
-    48,
-    30,
-    35
+    93,
+    64,
+    67
   ],
   "covs": [
     [
       [
-        0.045059419428687825,
-        0.008490981444211667
+        0.06685937550914603,
+        0.007793576630223937
       ],
       [
-        0.008490981444211667,
-        0.012274922239080626
+        0.007793576630223937,
+        0.008128562925032473
       ]
     ],
     [
       [
-        0.04917854122465461,
-        0.00047952730914621914
+        0.059330718619170754,
+        0.0095226181916019
       ],
       [
-        0.00047952730914621914,
-        0.006219340718250923
+        0.0095226181916019,
+        0.011775234430165968
       ]
     ],
     [
       [
-        0.057620063619215,
-        0.01003051741494693
+        0.16008216814670526,
+        0.01822136432473794
       ],
       [
-        0.01003051741494693,
-        0.03627639840801534
+        0.01822136432473794,
+        0.025087545361490646
       ]
     ]
   ],
   "meta": {
-    "purpose": "classifier trained on the real _02 captures; loaded by infer_live.py with --model",
-    "training_data": "REAL: data/real _02 set, one 60 s session per class, one subject, figure-8 path, tethered USB; stances by detector.find_stances + merge_close on raw counts at the committed thresholds",
+    "purpose": "classifier trained on the real captures; infer_live.py's default model",
+    "training_data": "REAL: data/real, sets _02, _03 (sessions per class: fast 2, shuffle 2, walk 2), 60 s per session, one subject, figure-8 path, tethered USB; stances by detector.find_stances + merge_close on raw counts at the committed thresholds",
     "sessions": [
       "fast02",
+      "fast_03",
       "shuffle02",
-      "walk02"
+      "shuffle_03",
+      "walk02",
+      "walk_03"
     ],
-    "n_rows": 113,
+    "n_rows": 224,
     "class_counts": {
-      "fast": 48,
-      "shuffle": 30,
-      "walk": 35
+      "fast": 93,
+      "shuffle": 64,
+      "walk": 67
     },
     "representation": "conductance",
     "representation_letter": "B",
     "gain_match": null,
+    "headline_cell": "A cop qda",
+    "headline_accuracy": 0.6071428571428571,
     "feature_set": "cop",
     "features": [
       "cop_path_len",
       "cop_displacement"
     ],
-    "split": "time-blocked within each session: first 60% of stances train, last 40% test, guard band 0 -- NOT a per-session split",
+    "split": "leave-one-session-out, 2 folds, pooled over the folds",
     "heldout_check": {
-      "n_train": 68,
-      "n_test": 45,
-      "accuracy": 0.6444444444444445,
-      "n_correct": 29,
-      "wilson95_lo": 0.49835546011952203,
-      "wilson95_hi": 0.7678110864309596,
-      "test_floor": 0.4222222222222222,
-      "block_cv_accuracy": 0.6371681415929203,
-      "random_split_mean": 0.6433333333333332
+      "split": "leave-one-session-out, every stance tested once out of its own session, pooled",
+      "n_test": 224,
+      "accuracy": 0.5982142857142857,
+      "n_correct": 134,
+      "wilson95_lo": 0.5328769868022516,
+      "wilson95_hi": 0.6602396345697894,
+      "test_floor": 0.41517857142857145,
+      "folds": [
+        {
+          "held_out": [
+            "fast02",
+            "shuffle02",
+            "walk02"
+          ],
+          "n_train": 111,
+          "n_test": 113,
+          "accuracy": 0.6194690265486725,
+          "wilson95_lo": 0.5274170845635211,
+          "wilson95_hi": 0.7036649957914209
+        },
+        {
+          "held_out": [
+            "fast_03",
+            "shuffle_03",
+            "walk_03"
+          ],
+          "n_train": 113,
+          "n_test": 111,
+          "accuracy": 0.5765765765765766,
+          "wilson95_lo": 0.4836090869599066,
+          "wilson95_hi": 0.6644208952068344
+        }
+      ],
+      "within_session_time_blocked_accuracy": 0.6666666666666666,
+      "random_split_mean": 0.6211111111111111
     },
     "geometry": {
       "insole_len_mm": 274.0,
@@ -134,7 +165,7 @@
       "MAX_DURATION": 200,
       "GAP_MERGE": 12
     },
-    "git_hash": "143218b",
+    "git_hash": "676c347",
     "fit_script": "scripts/train_real.py"
   }
 }

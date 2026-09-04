@@ -1,4 +1,4 @@
-"""A classifier trained on the real _02 captures, with the analysis behind it.
+"""A classifier trained on the real captures, with the analysis behind it.
 
     python scripts/train_real.py
 
@@ -8,26 +8,33 @@ here; regenerate it rather than editing it. Seeded, deterministic, and it
 runs from a fresh clone in well under a minute.
 
 What it does, in order:
-  1. loads the _02 captures (labels from data/real/README.md), segments each
-     with detector.py at the committed thresholds on RAW counts, and asserts
-     the pinned stance counts (stand 0, walk 35, fast 48, shuffle 30). Stand
-     yields no stances and is excluded from classification.
+  1. loads every training-grade capture in data/real/ (labels and sets from
+     data/real/README.md; _01 is failure evidence and is skipped), segments
+     each with detector.py at the committed thresholds on RAW counts, and
+     checks each file's stance count against its pin in SESSIONS below. A
+     capture with no pin stops the run and says so: adding a session means
+     pinning it, here and in tests/test_stances.py. Stand yields no stances
+     and is excluded from classification.
   2. computes features.py's extractors under three input representations
      (insole/representations.py): A raw counts, B conductance, C gain-matched
      conductance; and two feature sets: CoP-only (the set the sim bake-off
      used) and the full seven.
-  3. splits time-blocked within each session (first 60 % of stances train,
-     last 40 % test) -- NOT a per-session split, which one session per class
-     makes impossible -- and reports a random stance-level split (20 seeds)
-     and contiguous-block cross-validation beside it so the optimism gap is
-     visible. Switches to leave-one-session-out automatically once every
-     class has two or more sessions.
+  3. splits leave-one-session-out once every class has two or more sessions:
+     fold k holds out session k of every class, every stance is tested once
+     out of its own session, and the headline pools the folds. Beside it, so
+     the within-session optimism is visible: the time-blocked split within
+     each session (first 60 % of stances train, last 40 % test) and a random
+     stance-level split (20 seeds). With one session per class the
+     time-blocked split is the headline instead, with contiguous-block
+     cross-validation and the random split beside it.
   4. fits LDA and QDA (insole/discriminant.py) and sklearn logistic regression
      (as scripts/bakeoff.py does) for every representation x feature set,
      and chooses ONE headline cell by a rule fixed before any result was
      seen: CoP-only features, the representation and the model (LDA or QDA)
-     with the best contiguous-block CV accuracy, ties to raw counts and LDA.
-     The time-blocked test accuracy of that cell is the headline.
+     with the best pooled leave-one-session-out accuracy (best contiguous-
+     block CV accuracy in the one-session case), ties to raw counts and LDA.
+     That cell's leave-one-session-out (or time-blocked) accuracy is the
+     headline.
   5. lists every misclassified test stance, draws it, and quantifies the
      mechanisms behind each confusion pair; checks peak force against onset
      time per session; measures what the gain match changes; compares the
@@ -37,6 +44,7 @@ What it does, in order:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -70,10 +78,23 @@ from insole.splits import (                                        # noqa: E402
     sessions_per_class, time_blocked_split,
 )
 
-# As-captured filenames and labels: data/real/README.md.
-SESSIONS = [("stand", "stand_02.csv"), ("walk", "walk02.csv"),
-            ("fast", "fast02.csv"), ("shuffle", "shuffle02.csv")]
-EXPECTED_STANCES = {"stand": 0, "walk": 35, "fast": 48, "shuffle": 30}
+# Every training-grade capture, as captured (data/real/README.md): label,
+# file, and the stance count detector.find_stances + merge_close gives it at
+# the committed thresholds. The count is a per-file pin, not a per-label total,
+# so a new session never changes an old pin and an unpinned file is refused
+# rather than silently trained on. tests/test_stances.py pins the same counts
+# independently. _01 is failure evidence and is not listed.
+SESSIONS = [
+    ("stand",   "stand_02.csv",   0),
+    ("walk",    "walk02.csv",    35),
+    ("fast",    "fast02.csv",    48),
+    ("shuffle", "shuffle02.csv", 30),
+    ("stand",   "stand_03.csv",   0),
+    ("walk",    "walk_03.csv",   32),
+    ("fast",    "fast_03.csv",   45),
+    ("shuffle", "shuffle_03.csv", 34),
+]
+LABELS = ("stand", "walk", "fast", "shuffle")
 CLASSES = ["fast", "shuffle", "walk"]                  # np.unique order
 COP_FEATURES = ["cop_path_len", "cop_displacement"]     # scripts/bakeoff.py FEATURES
 FULL_FEATURES = ["peak_counts", "time_to_peak_s", "contact_time_s",
@@ -107,33 +128,42 @@ def git_hash():
 # 1. Data
 # ---------------------------------------------------------------------------
 def discover_sessions(real_dir):
-    """Known _02 files first, then any extra <label>*.csv that is not _01."""
-    found = []
-    seen = set()
-    for label, fname in SESSIONS:
-        path = os.path.join(real_dir, fname)
-        if os.path.exists(path):
-            found.append((label, fname))
+    """Pinned files that exist, in SESSIONS order, then any unpinned <label>*.csv.
+
+    Returns (pinned, unpinned): pinned as (label, fname, expected_stances),
+    unpinned as (label, fname). _01 files and check_all are never candidates.
+    """
+    pinned, seen = [], set()
+    for label, fname, want in SESSIONS:
+        if os.path.exists(os.path.join(real_dir, fname)):
+            pinned.append((label, fname, want))
             seen.add(fname)
+    unpinned = []
     for fname in sorted(os.listdir(real_dir)):
         if not fname.endswith(".csv") or fname in seen or "_01" in fname or "check_all" in fname:
             continue
-        for label in EXPECTED_STANCES:
+        for label in LABELS:
             if fname.startswith(label):
-                found.append((label, fname))
-                seen.add(fname)
-    return found
+                unpinned.append((label, fname))
+    return pinned, unpinned
+
+
+def segment(real_dir, fname):
+    df = pd.read_csv(os.path.join(real_dir, fname))
+    total = df[D.SENSOR_COLS].sum(axis=1).to_numpy(dtype=float)
+    return df, total, D.merge_close(D.find_stances(total))
 
 
 def load_sessions(real_dir):
+    """-> (sessions, unpinned). Each session carries its pin; unpinned is [(fname, n_stances)]."""
+    pinned, unpinned = discover_sessions(real_dir)
     out = []
-    for label, fname in discover_sessions(real_dir):
-        df = pd.read_csv(os.path.join(real_dir, fname))
-        total = df[D.SENSOR_COLS].sum(axis=1).to_numpy(dtype=float)
-        stances = D.merge_close(D.find_stances(total))
+    for label, fname, want in pinned:
+        df, total, stances = segment(real_dir, fname)
         out.append(dict(label=label, session=fname[:-4], file=fname, df=df,
-                        total=total, stances=stances))
-    return out
+                        total=total, stances=stances, expected=want))
+    extra = [(fname, len(segment(real_dir, fname)[2])) for _label, fname in unpinned]
+    return out, extra
 
 
 def build_frames(sessions, gains):
@@ -179,14 +209,31 @@ def fit_predict(kind, Xtr, ytr, Xte):
 
 
 def evaluate(kind, frame, feats, train_idx, test_idx):
+    """Fit on train_idx, score on test_idx. A stance with a non-finite value in
+    `feats` is excluded from this cell (both sides) and counted in
+    n_excluded; features.py returns NaN for loading_rate_cps when the peak is
+    the first frame of a stance, which a capture that starts mid-contact
+    produces. The stance stays in every cell whose features are finite."""
     X = frame[feats].to_numpy(float)
     y = frame["label"].to_numpy()
-    if not np.isfinite(X[np.concatenate([train_idx, test_idx])]).all():
-        return dict(skipped="non-finite feature value in the split")
-    pred, note = fit_predict(kind, X[train_idx], y[train_idx], X[test_idx])
+    finite = np.isfinite(X).all(axis=1)
+    train_idx, test_idx = np.asarray(train_idx), np.asarray(test_idx)
+    tr = train_idx[finite[train_idx]]
+    te = test_idx[finite[test_idx]]
+    excluded = set(train_idx[~finite[train_idx]].tolist()) | set(test_idx[~finite[test_idx]].tolist())
+    if len(te) == 0:
+        return dict(skipped="no test stance with finite features")
+    pred, note = fit_predict(kind, X[tr], y[tr], X[te])
     if pred is None:
         return dict(skipped=note)
-    yte = y[test_idx]
+    r = score(pred, y[te], te, note)
+    r["excluded"] = excluded                      # distinct stances left out of this cell
+    r["n_excluded"] = len(excluded)
+    return r
+
+
+def score(pred, yte, test_idx, note=""):
+    """Accuracy with its Wilson interval, confusion, precision and recall."""
     acc, lo, hi, se = accuracy_ci(yte, pred)
     labs = CLASSES
     conf = [[int(((yte == t) & (pred == q)).sum()) for q in labs] for t in labs]
@@ -200,6 +247,33 @@ def evaluate(kind, frame, feats, train_idx, test_idx):
     return dict(acc=acc, lo=lo, hi=hi, se=se, n_correct=int((pred == yte).sum()),
                 n_test=len(yte), pred=pred, yte=yte, test_idx=test_idx,
                 conf=conf, precision=prec, recall=rec, note=note)
+
+
+def evaluate_folds(kind, frame, feats, folds):
+    """Pooled out-of-fold result over [(train_idx, test_idx, held_out), ...].
+
+    Every stance is tested exactly once; the pooled predictions get the same
+    treatment as one test set (accuracy_ci over every tested stance), and
+    each fold's own accuracy and interval ride along under "folds".
+    """
+    preds, ytes, idxs, per_fold = [], [], [], []
+    for tr, te, held in folds:
+        r = evaluate(kind, frame, feats, tr, te)
+        if "skipped" in r:
+            return dict(skipped=r["skipped"])
+        preds.append(r["pred"])
+        ytes.append(r["yte"])
+        idxs.append(r["test_idx"])
+        per_fold.append(dict(held_out=list(held), n_train=len(tr), n_test=len(te),
+                             acc=r["acc"], lo=r["lo"], hi=r["hi"],
+                             n_correct=r["n_correct"], note=r["note"],
+                             excluded=r["excluded"]))
+    notes = sorted({f["note"] for f in per_fold if f["note"]})
+    out = score(np.concatenate(preds), np.concatenate(ytes), np.concatenate(idxs), "; ".join(notes))
+    out["folds"] = per_fold
+    out["excluded"] = set().union(*(f["excluded"] for f in per_fold))
+    out["n_excluded"] = len(out["excluded"])
+    return out
 
 
 def cv_accuracy(kind, frame, feats, folds):
@@ -342,7 +416,14 @@ def fig_feature_distributions(frame, feats, path):
 
 
 def fig_errors(sessions, rows, rep, gains, fs, path, title):
-    """One figure per confusion pair: total-force trace and CoP path per stance."""
+    """One figure per confusion pair: total-force trace and CoP path per stance.
+
+    At most MAX_ERROR_PANELS stances are drawn (the first that many in test
+    order); the document's table lists every one.
+    """
+    if len(rows) > MAX_ERROR_PANELS:
+        title += f" (first {MAX_ERROR_PANELS} of {len(rows)} drawn)"
+        rows = rows[:MAX_ERROR_PANELS]
     n = len(rows)
     fig, axes = plt.subplots(2, n, figsize=(2.9 * n, 6.2), squeeze=False)
     by_session = {s["session"]: s for s in sessions}
@@ -402,7 +483,17 @@ def fig_peak_vs_onset(frame, trends, path):
 # 5. Main
 # ---------------------------------------------------------------------------
 def fmt_ci(r):
-    return f"{r['acc']:.4f} [{r['lo']:.4f}, {r['hi']:.4f}] ({r['n_correct']}/{r['n_test']})"
+    return (f"{r['acc']:.4f} [{r['lo']:.4f}, {r['hi']:.4f}] ({r['n_correct']}/{r['n_test']})"
+            + (f" ({r['n_excluded']} excl.)" if r.get("n_excluded") else ""))
+
+
+MAX_ERROR_PANELS = 12                                   # per confusion-pair figure
+
+
+def set_suffix(fname):
+    """'walk02.csv' -> '02', 'walk_03.csv' -> '03': the capture set a file belongs to."""
+    m = re.search(r"(\d+)\.csv$", fname)
+    return m.group(1) if m else "?"
 
 
 def main(argv=None):
@@ -413,7 +504,8 @@ def main(argv=None):
     ap.add_argument("--fig-dir", default=str(FIGURES / "real_results"))
     ap.add_argument("--models-dir", default=str(MODELS))
     ap.add_argument("--guard", type=int, default=0,
-                    help="stances dropped from the end of each training block (default 0)")
+                    help="stances dropped from the end of each training block of the "
+                         "time-blocked split (default 0)")
     args = ap.parse_args(argv)
     os.makedirs(args.fig_dir, exist_ok=True)
     os.makedirs(args.models_dir, exist_ok=True)
@@ -430,91 +522,142 @@ def main(argv=None):
     fs = float(gm["fs_counts"])
 
     # -- 1. data -----------------------------------------------------------
-    head("1  DATA -- the _02 captures, segmented on raw counts")
-    sessions = load_sessions(args.real_dir)
-    counts = {}
+    head("1  DATA -- every training-grade capture, segmented on raw counts")
+    sessions, unpinned = load_sessions(args.real_dir)
+    bad = []
     for s in sessions:
-        counts.setdefault(s["label"], 0)
-        counts[s["label"]] += len(s["stances"])
-        print(f"  {s['label']:8s} {s['file']:16s} frames={len(s['df'])} stances={len(s['stances'])}")
-    for lab, want in EXPECTED_STANCES.items():
-        got = counts.get(lab, 0)
-        assert got == want, f"{lab}: {got} stances, expected {want} at MAX_DURATION={D.MAX_DURATION}"
+        ok = len(s["stances"]) == s["expected"]
+        print(f"  {s['label']:8s} {s['file']:16s} frames={len(s['df'])} "
+              f"stances={len(s['stances'])} pinned={s['expected']}" + ("" if ok else "  <-- MISMATCH"))
+        if not ok:
+            bad.append(s)
+    if bad:
+        raise SystemExit("stance count does not match its pin at MAX_DURATION="
+                         f"{D.MAX_DURATION}: " + ", ".join(
+                             f"{s['file']} got {len(s['stances'])} pinned {s['expected']}" for s in bad)
+                         + ". Either the detector moved or the pin is wrong; decide which, "
+                         "then fix that (SESSIONS here, REAL_COUNTS in tests/test_stances.py).")
+    if unpinned:
+        raise SystemExit("captures in the real-data directory with no stance pin: " + ", ".join(
+            f"{f} ({n} stances)" for f, n in unpinned)
+            + ". Add each to SESSIONS in scripts/train_real.py and to REAL_COUNTS in "
+            "tests/test_stances.py, then rerun.")
+    sets = sorted({set_suffix(s["file"]) for s in sessions})
     frames = build_frames(sessions, gains)
     frame_a = frames["raw"]
     n_all = len(frame_a)
+    y_all = frame_a["label"].to_numpy()
     spc = sessions_per_class(frame_a)
     multi_session = all(len(v) >= 2 for v in spc.values())
+    all_floor_lab, all_floor_n = Counter(y_all).most_common(1)[0]
+    all_floor = all_floor_n / n_all
     print(f"  moving stances: {n_all}  sessions per class: { {k: len(v) for k, v in spc.items()} }")
 
-    # -- 3. splits ---------------------------------------------------------
+    # -- 2. splits ---------------------------------------------------------
     head("2  SPLITS")
+    tb_train, tb_test, tb_per_class = time_blocked_split(frame_a, TRAIN_FRAC, args.guard)
+    tb_name = (f"time-blocked within each session: first {TRAIN_FRAC:.0%} of stances "
+               f"train, last {1 - TRAIN_FRAC:.0%} test, guard band {args.guard}")
     if multi_session:
         folds = list(leave_one_session_out(frame_a))
-        print(f"  every class has >= 2 sessions: leave-one-session-out, {len(folds)} folds")
-        train_idx, test_idx = folds[0][0], folds[0][1]
-        split_name = "leave-one-session-out (fold 0 shown as the headline split)"
-        per_class = {lab: (int((frame_a.loc[train_idx, 'label'] == lab).sum()),
-                           int((frame_a.loc[test_idx, 'label'] == lab).sum()), 0) for lab in CLASSES}
+        fold_pc = []
+        for tr, te, held in folds:
+            fold_pc.append((held, {lab: (int((frame_a.loc[tr, "label"] == lab).sum()),
+                                         int((frame_a.loc[te, "label"] == lab).sum()))
+                                   for lab in CLASSES}, len(tr), len(te)))
+        split_name = f"leave-one-session-out, {len(folds)} folds, pooled over the folds"
+        metric_name = "leave-one-session-out"
+        print(f"  every class has >= 2 sessions: {split_name}")
+        for k, (held, pc, ntr, nte) in enumerate(fold_pc):
+            print(f"    fold {k}: held out {held}: " + "  ".join(
+                f"{lab} train {pc[lab][0]:3d} test {pc[lab][1]:3d}" for lab in CLASSES)
+                + f"  (n_train={ntr} n_test={nte})")
+        print(f"  every stance is tested exactly once, out of its own session: pooled n_test={n_all}, "
+              f"majority floor {all_floor:.4f} ({all_floor_n}/{n_all}, always '{all_floor_lab}')")
+        print(f"  reported beside it: {tb_name} (pooled over sessions): " + "  ".join(
+            f"{lab} train {tb_per_class[lab][0]:3d} test {tb_per_class[lab][1]:3d}" for lab in CLASSES))
+        train_idx, test_idx, per_class = None, None, None
+        floor, floor_lab, floor_n = all_floor, all_floor_lab, all_floor_n
+        block_folds = None
     else:
-        train_idx, test_idx, per_class = time_blocked_split(frame_a, TRAIN_FRAC, args.guard)
-        split_name = (f"time-blocked within each session: first {TRAIN_FRAC:.0%} of stances "
-                      f"train, last {1 - TRAIN_FRAC:.0%} test, guard band {args.guard}")
+        folds = None
+        train_idx, test_idx, per_class = tb_train, tb_test, tb_per_class
+        split_name = tb_name
+        metric_name = "time-blocked"
         print("  ONE session per class: no per-session split is possible. Using " + split_name)
-    for lab in CLASSES:
-        print(f"    {lab:8s} train {per_class[lab][0]:3d}  test {per_class[lab][1]:3d}  dropped {per_class[lab][2]}")
-    yte_all = frame_a.loc[test_idx, "label"].to_numpy()
-    floor_lab, floor_n = Counter(yte_all).most_common(1)[0]
-    floor = floor_n / len(yte_all)
-    print(f"  n_train={len(train_idx)} n_test={len(test_idx)}  test majority floor = "
-          f"{floor:.4f} ({floor_n}/{len(test_idx)}, always '{floor_lab}')")
-    block_folds = list(contiguous_block_folds(frame_a, N_BLOCKS))
+        for lab in CLASSES:
+            print(f"    {lab:8s} train {per_class[lab][0]:3d}  test {per_class[lab][1]:3d}  "
+                  f"dropped {per_class[lab][2]}")
+        yte_all = frame_a.loc[test_idx, "label"].to_numpy()
+        floor_lab, floor_n = Counter(yte_all).most_common(1)[0]
+        floor = floor_n / len(yte_all)
+        print(f"  n_train={len(train_idx)} n_test={len(test_idx)}  test majority floor = "
+              f"{floor:.4f} ({floor_n}/{len(test_idx)}, always '{floor_lab}')")
+        block_folds = list(contiguous_block_folds(frame_a, N_BLOCKS))
 
-    # -- 4. grid -----------------------------------------------------------
+    # -- 3. grid -----------------------------------------------------------
     head("3  RESULTS GRID -- representation x feature set x model")
     grid = OrderedDict()
-    cv = {}
+    sel = {}                                         # the selection metric per cell
     for rep in REPRESENTATIONS:
         fr = frames[rep]
         for fset, feats in FEATURE_SETS.items():
             for kind in MODEL_KINDS:
                 key = (rep, fset, kind)
-                r = evaluate(kind, fr, feats, train_idx, test_idx)
-                cv_acc, cv_folds, cv_skip = cv_accuracy(kind, fr, feats, block_folds)
                 rnd = random_summary(kind, fr, feats)
-                grid[key] = dict(tb=r, cv=cv_acc, cv_folds=cv_folds, cv_skip=cv_skip,
-                                 rnd=rnd)
-                cv[key] = cv_acc
-                if "skipped" in r:
-                    print(f"  {LETTER[rep]} {fset:4s} {kind:3s}  SKIPPED: {r['skipped']}")
+                if multi_session:
+                    r = evaluate_folds(kind, fr, feats, folds)
+                    tb = evaluate(kind, fr, feats, tb_train, tb_test)
+                    grid[key] = dict(main=r, tb=tb, rnd=rnd)
+                    sel[key] = r["acc"] if "skipped" not in r else float("nan")
+                    if "skipped" in r:
+                        print(f"  {LETTER[rep]} {fset:4s} {kind:3s}  SKIPPED: {r['skipped']}")
+                    else:
+                        print(f"  {LETTER[rep]} {fset:4s} {kind:3s}  LOSO {fmt_ci(r)}  folds "
+                              + "/".join(f"{f['acc']:.4f}" for f in r["folds"])
+                              + (f"  within-session {fmt_ci(tb)}" if "skipped" not in tb
+                                 else f"  within-session SKIPPED: {tb['skipped']}")
+                              + f"  random {rnd[0]:.4f} [{rnd[1]:.4f}, {rnd[2]:.4f}]"
+                              + (f"  ({r['note']})" if r["note"] else "")
+                              + (f"  [{r['n_excluded']} stance(s) excluded: non-finite feature]"
+                                 if r["n_excluded"] else ""))
                 else:
-                    print(f"  {LETTER[rep]} {fset:4s} {kind:3s}  time-blocked {fmt_ci(r)}  "
-                          f"block-CV {cv_acc:.4f}  random {rnd[0]:.4f} [{rnd[1]:.4f}, {rnd[2]:.4f}]"
-                          + (f"  ({r['note']})" if r["note"] else ""))
+                    r = evaluate(kind, fr, feats, train_idx, test_idx)
+                    cv_acc, cv_folds, cv_skip = cv_accuracy(kind, fr, feats, block_folds)
+                    grid[key] = dict(main=r, cv=cv_acc, cv_folds=cv_folds, cv_skip=cv_skip, rnd=rnd)
+                    sel[key] = cv_acc
+                    if "skipped" in r:
+                        print(f"  {LETTER[rep]} {fset:4s} {kind:3s}  SKIPPED: {r['skipped']}")
+                    else:
+                        print(f"  {LETTER[rep]} {fset:4s} {kind:3s}  time-blocked {fmt_ci(r)}  "
+                              f"block-CV {cv_acc:.4f}  random {rnd[0]:.4f} [{rnd[1]:.4f}, {rnd[2]:.4f}]"
+                              + (f"  ({r['note']})" if r["note"] else ""))
 
     # -- headline by the pre-registered rule --------------------------------
     order_rep = {"raw": 0, "gain_matched": 1, "conductance": 2}
     order_kind = {"lda": 0, "qda": 1}
     candidates = [k for k in grid if k[1] == "cop" and k[2] in ("lda", "qda")
-                  and "skipped" not in grid[k]["tb"] and np.isfinite(cv[k])]
-    headline = sorted(candidates, key=lambda k: (-round(cv[k], 6), order_rep[k[0]], order_kind[k[2]]))[0]
+                  and "skipped" not in grid[k]["main"] and np.isfinite(sel[k])]
+    headline = sorted(candidates, key=lambda k: (-round(sel[k], 6), order_rep[k[0]], order_kind[k[2]]))[0]
     h_rep, h_fset, h_kind = headline
-    H = grid[headline]["tb"]
+    H = grid[headline]["main"]
     h_frame = frames[h_rep]
     h_feats = FEATURE_SETS[h_fset]
-    print(f"\n  HEADLINE (rule: CoP-only; best block-CV among LDA/QDA; ties -> raw, LDA): "
-          f"{LETTER[h_rep]} {h_fset} {h_kind}  time-blocked {fmt_ci(H)}")
+    sel_name = ("pooled leave-one-session-out accuracy" if multi_session
+                else "contiguous-block CV accuracy")
+    print(f"\n  HEADLINE (rule: CoP-only; best {sel_name} among LDA/QDA; ties -> raw, LDA): "
+          f"{LETTER[h_rep]} {h_fset} {h_kind}  {metric_name} {fmt_ci(H)}")
     other_kind = "qda" if h_kind == "lda" else "lda"
-    O = grid[(h_rep, h_fset, other_kind)]["tb"]
+    O = grid[(h_rep, h_fset, other_kind)]["main"]
     b, c, p_mc = (mcnemar(H["pred"], O["pred"], H["yte"]) if "skipped" not in O else (0, 0, float("nan")))
     guard_r = None
     if not multi_session:
         g_tr, g_te, g_pc = time_blocked_split(frame_a, TRAIN_FRAC, 1)
         guard_r = evaluate(h_kind, h_frame, h_feats, g_tr, g_te)
-    full_best = max((k for k in grid if k[1] == "full" and "skipped" not in grid[k]["tb"]),
-                    key=lambda k: grid[k]["tb"]["acc"])
+    full_best = max((k for k in grid if k[1] == "full" and "skipped" not in grid[k]["main"]),
+                    key=lambda k: grid[k]["main"]["acc"])
 
-    # -- 5. mechanisms -------------------------------------------------------
+    # -- 4. mechanisms -------------------------------------------------------
     head("4  MECHANISMS")
     errors = []
     for i, (t, q) in enumerate(zip(H["yte"], H["pred"])):
@@ -527,9 +670,15 @@ def main(argv=None):
     pairs = OrderedDict()
     for e in errors:
         pairs.setdefault((e["true"], e["pred"]), []).append(e)
-    train_means = {lab: h_frame.loc[train_idx][h_frame.loc[train_idx, "label"] == lab][h_feats + ["s4_zero_frac"]].mean()
-                   for lab in CLASSES}
-    overlap = band_overlap(h_frame, h_feats, train_idx)
+    if multi_session:
+        ref_idx = h_frame.index.to_numpy()
+        ref_name = "class means over all sessions"
+    else:
+        ref_idx = train_idx
+        ref_name = "training means"
+    ref_means = {lab: h_frame.loc[ref_idx][h_frame.loc[ref_idx, "label"] == lab][h_feats + ["s4_zero_frac"]].mean()
+                 for lab in CLASSES}
+    overlap = band_overlap(h_frame, h_feats, ref_idx)
     s4_frac = {lab: float(frame_a.loc[frame_a["label"] == lab, "s4_zero_frac"].mean()) for lab in CLASSES}
     all_s4 = np.concatenate([s["df"]["s4"].to_numpy() for s in sessions])
     substitute = float(np.median(all_s4[all_s4 > 0]))
@@ -548,10 +697,11 @@ def main(argv=None):
               f"(p={trends[lab][3]:.3f})")
 
     # sim-trained models on the same stances, under the representation they
-    # were fitted on (their meta says which; pre-stage-20 fits were raw).
+    # were fitted on (their meta says which; pre-stage-20 fits were raw). They
+    # are inputs, read from the repository's models/, not from --models-dir.
     sim_acc = {}
     for kind in ("lda", "qda"):
-        path = os.path.join(args.models_dir, f"model_{kind}.json")
+        path = os.path.join(str(MODELS), f"model_{kind}.json")
         if os.path.exists(path):
             m = load_model(path)
             m_rep = m["meta"].get("representation", "raw")
@@ -560,7 +710,6 @@ def main(argv=None):
             pred = predict(m, X)
             sim_acc[kind] = (float((pred == fr["label"].to_numpy()).mean()),
                              int((pred == fr["label"].to_numpy()).sum()), m_rep)
-    all_floor = Counter(frame_a["label"]).most_common(1)[0][1] / n_all
 
     # -- figures ---------------------------------------------------------------
     fig_feature_distributions(h_frame, h_feats, os.path.join(args.fig_dir, "feature_distributions.png"))
@@ -573,39 +722,70 @@ def main(argv=None):
                    f"CoP under {LETTER[h_rep]} ({h_rep}); circle = onset, square = end")
         err_figs[(t, q)] = name
 
-    # -- 6. persist models --------------------------------------------------------
+    # -- 5. persist models --------------------------------------------------------
     head("5  PERSIST")
-    X_all = h_frame[h_feats].to_numpy(float)
-    y_all = h_frame["label"].to_numpy()
+    # The persisted models are what infer_live.py loads, and it feeds the
+    # SHIPPED representation on every source (it refuses a model whose meta
+    # names another), so they are fitted under SHIPPED even when the rule's
+    # headline cell is a different representation. The document reports both.
+    p_rep = SHIPPED
+    p_frame = frames[p_rep]
+    P = grid[(p_rep, h_fset, h_kind)]["main"]
+    if p_rep != h_rep:
+        print(f"  headline representation is {LETTER[h_rep]} ({h_rep}); persisting under the shipped "
+              f"{LETTER[p_rep]} ({p_rep}): {h_kind} {metric_name} {fmt_ci(P)}")
+    X_all = p_frame[h_feats].to_numpy(float)
     saved = {}
+    n_sess_txt = ", ".join(f"{lab} {len(spc[lab])}" for lab in CLASSES)
     for kind, fit in (("lda", fit_lda), ("qda", fit_qda)):
         try:
             m = fit(X_all, y_all)
         except (DegenerateClassError, SingularCovarianceError) as e:
             print(f"  {kind}: not persisted ({e})")
             continue
-        r = grid[(h_rep, h_fset, kind)]["tb"]
+        g = grid[(p_rep, h_fset, kind)]
+        r = g["main"]
+        if "skipped" in r:
+            check = {"skipped": r["skipped"]}
+        elif multi_session:
+            check = {"split": "leave-one-session-out, every stance tested once out of its own session, pooled",
+                     "n_test": int(r["n_test"]), "accuracy": float(r["acc"]),
+                     "n_correct": int(r["n_correct"]),
+                     "wilson95_lo": float(r["lo"]), "wilson95_hi": float(r["hi"]),
+                     "test_floor": float(all_floor),
+                     "folds": [{"held_out": f["held_out"], "n_train": int(f["n_train"]),
+                                "n_test": int(f["n_test"]), "accuracy": float(f["acc"]),
+                                "wilson95_lo": float(f["lo"]), "wilson95_hi": float(f["hi"])}
+                               for f in r["folds"]],
+                     "within_session_time_blocked_accuracy": (float(g["tb"]["acc"])
+                                                              if "skipped" not in g["tb"] else None),
+                     "random_split_mean": float(g["rnd"][0])}
+        else:
+            check = {"split": "time-blocked within session, NOT per-session",
+                     "n_train": int(len(train_idx)), "n_test": int(len(test_idx)),
+                     "accuracy": float(r["acc"]), "n_correct": int(r["n_correct"]),
+                     "wilson95_lo": float(r["lo"]), "wilson95_hi": float(r["hi"]),
+                     "test_floor": float(floor),
+                     "block_cv_accuracy": float(g["cv"]),
+                     "random_split_mean": float(g["rnd"][0])}
         meta = {
-            "purpose": "classifier trained on the real _02 captures; loaded by infer_live.py with --model",
-            "training_data": ("REAL: data/real _02 set, one 60 s session per class, one subject, "
+            "purpose": "classifier trained on the real captures; infer_live.py's default model",
+            "training_data": (f"REAL: data/real, sets {', '.join('_' + s for s in sets)} "
+                              f"(sessions per class: {n_sess_txt}), 60 s per session, one subject, "
                               "figure-8 path, tethered USB; stances by detector.find_stances + "
                               "merge_close on raw counts at the committed thresholds"),
             "sessions": sorted(frame_a["session"].unique().tolist()),
             "n_rows": int(n_all),
             "class_counts": {lab: int((y_all == lab).sum()) for lab in CLASSES},
-            "representation": h_rep,
-            "representation_letter": LETTER[h_rep],
-            "gain_match": os.path.relpath(args.gain, REPO) if h_rep == "gain_matched" else None,
+            "representation": p_rep,
+            "representation_letter": LETTER[p_rep],
+            "gain_match": os.path.relpath(args.gain, REPO) if p_rep == "gain_matched" else None,
+            "headline_cell": f"{LETTER[h_rep]} {h_fset} {h_kind}",
+            "headline_accuracy": float(H["acc"]),
             "feature_set": h_fset,
             "features": h_feats,
-            "split": split_name + " -- NOT a per-session split",
-            "heldout_check": ({"n_train": int(len(train_idx)), "n_test": int(len(test_idx)),
-                               "accuracy": float(r["acc"]), "n_correct": int(r["n_correct"]),
-                               "wilson95_lo": float(r["lo"]), "wilson95_hi": float(r["hi"]),
-                               "test_floor": float(floor),
-                               "block_cv_accuracy": float(grid[(h_rep, h_fset, kind)]["cv"]),
-                               "random_split_mean": float(grid[(h_rep, h_fset, kind)]["rnd"][0])}
-                              if "skipped" not in r else {"skipped": r["skipped"]}),
+            "split": split_name + ("" if multi_session else " -- NOT a per-session split"),
+            "heldout_check": check,
             "geometry": {"insole_len_mm": D.INSOLE_LEN_MM, "insole_width_mm": D.INSOLE_WIDTH_MM,
                          "sensor_mm": {k: list(v) for k, v in D.SENSOR_MM.items()}},
             "detector": {"T_ON": D.T_ON, "T_OFF": D.T_OFF, "MIN_DURATION": D.MIN_DURATION,
@@ -618,7 +798,7 @@ def main(argv=None):
         saved[kind] = os.path.relpath(path, REPO)
         print(f"  wrote {saved[kind]}")
 
-    # -- 7. the document ------------------------------------------------------------
+    # -- 6. the document ------------------------------------------------------------
     head("6  DOCUMENT -> " + os.path.relpath(args.doc, REPO))
     L = LETTER
     out("# Real-data results")
@@ -631,22 +811,28 @@ def main(argv=None):
     out()
     out("## 1. Data")
     out()
-    out("The `_02` captures only (`data/real/README.md`): one 60 s session per activity, "
-        "100 Hz, tethered USB, one subject, one day, walking a figure-8. `_01` is failure "
-        "evidence and is never trained or evaluated on. Segmentation uses `insole/detector.py` "
-        f"at the committed thresholds (T_ON={D.T_ON}, T_OFF={D.T_OFF}, MIN_DURATION={D.MIN_DURATION}, "
-        f"MAX_DURATION={D.MAX_DURATION}, GAP_MERGE={D.GAP_MERGE}) on raw counts, and the counts are "
-        "asserted against `tests/test_stances.py`:")
+    out(f"Every training-grade capture in `data/real/` (`data/real/README.md`): "
+        f"{len(sets)} set{'s' if len(sets) != 1 else ''} ({', '.join('`_' + s + '`' for s in sets)}), "
+        "one 60 s session per activity in each, 100 Hz, tethered USB, one subject, walking a "
+        "figure-8. `_01` is failure evidence and is never trained or evaluated on. Segmentation "
+        "uses `insole/detector.py` at the committed thresholds "
+        f"(T_ON={D.T_ON}, T_OFF={D.T_OFF}, MIN_DURATION={D.MIN_DURATION}, "
+        f"MAX_DURATION={D.MAX_DURATION}, GAP_MERGE={D.GAP_MERGE}) on raw counts, and every file's "
+        "stance count is pinned twice, in `SESSIONS` here and in `tests/test_stances.py`:")
     out()
     out("| activity | file | frames | stances kept |")
     out("|---|---|---|---|")
     for s in sessions:
         out(f"| {s['label']} | `{s['file']}` | {len(s['df'])} | {len(s['stances'])} |")
     out()
-    out(f"Standing is one unbroken {len(sessions[0]['df'])}-frame contact, rejected by MAX_DURATION, so "
-        f"it contributes no stances and is excluded from classification. n = {n_all} moving stances "
-        f"({', '.join(f'{lab} {int((y_all == lab).sum())}' for lab in CLASSES)}); the all-data "
-        f"majority floor is {all_floor:.4f}.")
+    per_sess = ", ".join(f"{lab} " + " + ".join(
+        str(int(((frame_a['label'] == lab) & (frame_a['session'] == ses)).sum())) for ses in spc[lab])
+        for lab in CLASSES)
+    out("Each standing capture is one unbroken contact the length of the file, rejected by "
+        f"MAX_DURATION, so it contributes no stances and is excluded from classification. n = {n_all} "
+        f"moving stances ({', '.join(f'{lab} {int((y_all == lab).sum())}' for lab in CLASSES)}; per "
+        f"session {per_sess}); the all-data majority floor is {all_floor:.4f} ({all_floor_n}/{n_all}, "
+        f"`{all_floor_lab}`).")
     out()
     out("## 2. Representations and feature sets")
     out()
@@ -661,17 +847,27 @@ def main(argv=None):
     out("Force is linear in conductance (`insole/calibration.py`), so under B and C the centre of "
         "pressure is a force-proportional centroid and under A it is not. The gain match is a "
         "single-point relative match at ~12 N: above 824 counts (62–67 % of loaded walking "
-        "frames, `scripts/analyze_real.py` C3) it extrapolates, and below ~5 N the channels' "
-        "activation thresholds differ, so it does not hold there.")
+        "frames of the `_02` set, `scripts/analyze_real.py` C3) it extrapolates, and below ~5 N "
+        "the channels' activation thresholds differ, so it does not hold there.")
     out()
+    best_by_rep = {rep: max(sel[(rep, "cop", k)] for k in ("lda", "qda")) for rep in REPRESENTATIONS}
+    rule_txt = (f"{sel_name}, CoP-only, best of LDA/QDA: A {best_by_rep['raw']:.4f}, "
+                f"B {best_by_rep['conductance']:.4f}, C {best_by_rep['gain_matched']:.4f}")
+    if h_rep == SHIPPED:
+        verdict = f"On the current data the rule picks {L[SHIPPED]} again ({rule_txt})."
+    else:
+        d = abs(grid[(h_rep, 'cop', h_kind)]['main']['n_correct'] - grid[(SHIPPED, 'cop', h_kind)]['main']['n_correct'])
+        verdict = (f"On the current data the rule prefers {L[h_rep]} ({h_rep}) by {d} stance(s) in "
+                   f"{H['n_test']} ({rule_txt}); the shipped representation is left at {L[SHIPPED]}, "
+                   "because switching it moves the sim bake-off frame, the sim-trained models and the "
+                   "streaming path with it, and the persisted real models are fitted under "
+                   f"{L[SHIPPED]} so that `infer_live.py` accepts them (section 4 gives both numbers).")
     out(f"**Shipped representation: {L[SHIPPED]} ({SHIPPED})** -- `insole.representations.SHIPPED`, "
         f"the one `insole/infer_live.py` feeds on every source, `scripts/bakeoff.py` builds the sim "
-        f"frame under, and the persisted models are fitted on. It was chosen by the headline rule "
-        f"in section 4 (block-CV, CoP-only, LDA/QDA: A {max(cv[('raw', 'cop', k)] for k in ('lda', 'qda')):.4f}, "
-        f"B {max(cv[('conductance', 'cop', k)] for k in ('lda', 'qda')):.4f}, "
-        f"C {max(cv[('gain_matched', 'cop', k)] for k in ('lda', 'qda')):.4f}). The simulator has no "
-        f"per-channel gain to correct, so under B every source is treated identically; the gain match "
-        f"still runs per frame for the extrapolation counter.")
+        f"frame under, and the persisted models are fitted on. It was chosen at stage 20 by the "
+        f"headline rule in section 4 on the `_02` set. {verdict} The simulator has no per-channel "
+        "gain to correct, so under B every source is treated identically; the gain match still runs "
+        "per frame for the extrapolation counter and never reaches the classifier (variant B, not C).")
     out()
     out("Two feature sets: **cop** = `cop_path_len`, `cop_displacement` (exactly the set "
         "`scripts/bakeoff.py` used, for comparability with the simulator), and **full** = all "
@@ -685,72 +881,157 @@ def main(argv=None):
     out()
     out("## 3. Split")
     out()
-    out(f"**{split_name}.** " + ("Every class has at least two sessions, so the script switched to "
-        "leave-one-session-out." if multi_session else
-        "There is one session per class, so no per-session split exists. Stances are sorted by "
-        "onset within each session; the earlier ones train and the later ones test. This is a "
-        "within-session number and carries the leakage that implies: consecutive stances of one "
-        "walk share the subject, the day, the shoe, the path and the sensor state. Do not read it as "
-        "generalisation to a new session."))
-    out()
-    out("| class | train | test | dropped (guard) |")
-    out("|---|---|---|---|")
-    for lab in CLASSES:
-        out(f"| {lab} | {per_class[lab][0]} | {per_class[lab][1]} | {per_class[lab][2]} |")
-    out()
-    out(f"n_train = {len(train_idx)}, n_test = {len(test_idx)}, test majority floor = {floor:.4f} "
-        f"({floor_n}/{len(test_idx)}, always `{floor_lab}`).")
-    out()
-    out("Two further splits are reported beside it so the optimism gap is visible: a **random "
-        f"stance-level split** with the same per-class sizes, {N_RANDOM} seeds (mean, min, max), which "
-        "puts near-copies of every test stance into training and is expected to be optimistic; and "
-        f"**contiguous-block cross-validation**, {N_BLOCKS} time blocks per class, each block held out "
-        "once, which tests every stance exactly once with its own block out of training.")
+    if multi_session:
+        out(f"**{split_name}.** Every class has at least two sessions, so the script switched "
+            "itself to leave-one-session-out: fold k holds out session k of every class and trains "
+            "on the rest, so every stance is tested exactly once, out of its own session, and the "
+            "headline pools the folds' predictions. Nothing in a test fold shares a session with "
+            "anything in its training fold. It is still one subject, the same shoe, the same "
+            "figure-8 path, and two sessions is the minimum that makes this split possible, not a "
+            "comfortable margin: with two folds one odd session moves the number a lot.")
+        out()
+        out("| fold | held out | " + " | ".join(f"{lab} train / test" for lab in CLASSES) + " | n_train | n_test |")
+        out("|---|---|" + "---|" * (len(CLASSES) + 2))
+        for k, (held, pc, ntr, nte) in enumerate(fold_pc):
+            out(f"| {k} | {', '.join(f'`{h}`' for h in held)} | "
+                + " | ".join(f"{pc[lab][0]} / {pc[lab][1]}" for lab in CLASSES)
+                + f" | {ntr} | {nte} |")
+        out()
+        out(f"Pooled n_test = {n_all} (every stance once), majority floor = {all_floor:.4f} "
+            f"({all_floor_n}/{n_all}, always `{all_floor_lab}`).")
+        out()
+        out(f"Reported beside it so the within-session optimism is visible: the **{tb_name}**, "
+            "pooled over sessions (" + ", ".join(
+                f"{lab} {tb_per_class[lab][0]}/{tb_per_class[lab][1]}" for lab in CLASSES)
+            + "), which was the headline recipe while there was one session per class and "
+            "carries the leakage that implies (consecutive stances of one walk share the day, the "
+            "sensor state and the path); and a **random stance-level split** with the same "
+            f"per-class sizes, {N_RANDOM} seeds (mean, min, max), which puts near-copies of every "
+            "test stance into training and is expected to be the most optimistic of the three.")
+    else:
+        out(f"**{split_name}.** There is one session per class, so no per-session split exists. "
+            "Stances are sorted by onset within each session; the earlier ones train and the later "
+            "ones test. This is a within-session number and carries the leakage that implies: "
+            "consecutive stances of one walk share the subject, the day, the shoe, the path and the "
+            "sensor state. Do not read it as generalisation to a new session.")
+        out()
+        out("| class | train | test | dropped (guard) |")
+        out("|---|---|---|---|")
+        for lab in CLASSES:
+            out(f"| {lab} | {per_class[lab][0]} | {per_class[lab][1]} | {per_class[lab][2]} |")
+        out()
+        out(f"n_train = {len(train_idx)}, n_test = {len(test_idx)}, test majority floor = {floor:.4f} "
+            f"({floor_n}/{len(test_idx)}, always `{floor_lab}`).")
+        out()
+        out("Two further splits are reported beside it so the optimism gap is visible: a **random "
+            f"stance-level split** with the same per-class sizes, {N_RANDOM} seeds (mean, min, max), which "
+            "puts near-copies of every test stance into training and is expected to be optimistic; and "
+            f"**contiguous-block cross-validation**, {N_BLOCKS} time blocks per class, each block held out "
+            "once, which tests every stance exactly once with its own block out of training.")
     out()
     out("## 4. Results grid")
     out()
-    out("Accuracy on the time-blocked test set with a Wilson 95 % interval and the count, then the "
-        "block-CV pooled accuracy, then the random-split mean [min, max]. LDA/QDA are "
-        "`insole/discriminant.py`; LR is sklearn's `LogisticRegression` on standardised features, as "
-        "in `scripts/bakeoff.py`. A skipped cell says why.")
-    out()
-    out("| rep | features | model | time-blocked acc [Wilson 95 %] | block-CV | random split |")
-    out("|---|---|---|---|---|---|")
-    for key, g in grid.items():
-        rep, fset, kind = key
-        r = g["tb"]
-        star = " **(headline)**" if key == headline else ""
-        if "skipped" in r:
-            out(f"| {L[rep]} | {fset} | {kind} | skipped: {r['skipped']} | | |")
-        else:
-            out(f"| {L[rep]} | {fset} | {kind} | {fmt_ci(r)}{star} | {g['cv']:.4f} | "
-                f"{g['rnd'][0]:.4f} [{g['rnd'][1]:.4f}, {g['rnd'][2]:.4f}] |")
+    if multi_session:
+        out("Pooled leave-one-session-out accuracy with a Wilson 95 % interval and the count, then "
+            "each fold's accuracy (fold order as in section 3), then the within-session time-blocked "
+            "accuracy with its interval, then the random-split mean [min, max]. LDA/QDA are "
+            "`insole/discriminant.py`; LR is sklearn's `LogisticRegression` on standardised features, as "
+            "in `scripts/bakeoff.py`. A skipped cell says why.")
+        out()
+        out("| rep | features | model | leave-one-session-out acc [Wilson 95 %] | per fold | within-session time-blocked | random split |")
+        out("|---|---|---|---|---|---|---|")
+        for key, g in grid.items():
+            rep, fset, kind = key
+            r = g["main"]
+            star = " **(headline)**" if key == headline else ""
+            if "skipped" in r:
+                out(f"| {L[rep]} | {fset} | {kind} | skipped: {r['skipped']} | | | |")
+            else:
+                tb = g["tb"]
+                out(f"| {L[rep]} | {fset} | {kind} | {fmt_ci(r)}{star} | "
+                    + " / ".join(f"{f['acc']:.4f}" for f in r["folds"]) + " | "
+                    + (fmt_ci(tb) if "skipped" not in tb else f"skipped: {tb['skipped']}") + " | "
+                    f"{g['rnd'][0]:.4f} [{g['rnd'][1]:.4f}, {g['rnd'][2]:.4f}] |")
+    else:
+        out("Accuracy on the time-blocked test set with a Wilson 95 % interval and the count, then the "
+            "block-CV pooled accuracy, then the random-split mean [min, max]. LDA/QDA are "
+            "`insole/discriminant.py`; LR is sklearn's `LogisticRegression` on standardised features, as "
+            "in `scripts/bakeoff.py`. A skipped cell says why.")
+        out()
+        out("| rep | features | model | time-blocked acc [Wilson 95 %] | block-CV | random split |")
+        out("|---|---|---|---|---|---|")
+        for key, g in grid.items():
+            rep, fset, kind = key
+            r = g["main"]
+            star = " **(headline)**" if key == headline else ""
+            if "skipped" in r:
+                out(f"| {L[rep]} | {fset} | {kind} | skipped: {r['skipped']} | | |")
+            else:
+                out(f"| {L[rep]} | {fset} | {kind} | {fmt_ci(r)}{star} | {g['cv']:.4f} | "
+                    f"{g['rnd'][0]:.4f} [{g['rnd'][1]:.4f}, {g['rnd'][2]:.4f}] |")
+    nonfinite = frame_a.loc[~np.isfinite(frame_a[FULL_FEATURES].to_numpy(float)).all(axis=1)]
+    if len(nonfinite):
+        out()
+        out(f"\"excl.\" counts stances left out of that cell because a feature is not finite: "
+            + "; ".join(f"`{r['session']}` stance at frame {int(r['start'])} "
+                        f"({', '.join(f for f in FULL_FEATURES if not np.isfinite(r[f]))})"
+                        for _, r in nonfinite.iterrows())
+            + ". `loading_rate_cps` is undefined when the peak is the first frame of the stance, "
+            "which a capture that starts mid-contact produces; the stance stays in every cell whose "
+            "features are finite.")
     out()
     out("### Headline")
     out()
-    out(f"Rule, fixed before any result was seen: CoP-only features; among LDA and QDA under A, B "
-        f"and C, the cell with the best block-CV accuracy; ties go to raw counts and to LDA. "
-        f"That is **{L[h_rep]} ({h_rep}), {h_fset}, {h_kind.upper()}**: time-blocked accuracy "
-        f"**{H['acc']:.4f}** [{H['lo']:.4f}, {H['hi']:.4f}] ({H['n_correct']}/{H['n_test']}) against a "
-        f"test floor of {floor:.4f}; block-CV {grid[headline]['cv']:.4f} "
-        f"(folds {', '.join(f'{a:.3f}' for a in grid[headline]['cv_folds'])}); random split "
-        f"{grid[headline]['rnd'][0]:.4f} [{grid[headline]['rnd'][1]:.4f}, {grid[headline]['rnd'][2]:.4f}]. "
-        f"The gap between the random-split mean and the time-blocked number is the optimism that "
-        f"temporal adjacency buys on this data: {grid[headline]['rnd'][0] - H['acc']:+.4f}.")
+    if multi_session:
+        out(f"Rule, fixed before any result was seen: CoP-only features; among LDA and QDA under A, B "
+            f"and C, the cell with the best {sel_name}; ties go to raw counts and to LDA. "
+            f"That is **{L[h_rep]} ({h_rep}), {h_fset}, {h_kind.upper()}**: leave-one-session-out "
+            f"accuracy **{H['acc']:.4f}** [{H['lo']:.4f}, {H['hi']:.4f}] ({H['n_correct']}/{H['n_test']}) "
+            f"against a majority floor of {all_floor:.4f}; per fold "
+            + ", ".join(f"{f['acc']:.4f} [{f['lo']:.4f}, {f['hi']:.4f}] ({f['n_correct']}/{f['n_test']}) "
+                        f"holding out {', '.join(f'`{h}`' for h in f['held_out'])}" for f in H["folds"])
+            + f"; within-session time-blocked {fmt_ci(grid[headline]['tb'])}; random split "
+            f"{grid[headline]['rnd'][0]:.4f} [{grid[headline]['rnd'][1]:.4f}, {grid[headline]['rnd'][2]:.4f}]. "
+            "The selection metric and the reported metric are the same number here, picked among six "
+            "cells, so the headline carries that much selection optimism. The gap between the "
+            "within-session number and the leave-one-session-out number is what a session boundary "
+            f"costs on this data: {grid[headline]['tb']['acc'] - H['acc']:+.4f}.")
+    else:
+        out(f"Rule, fixed before any result was seen: CoP-only features; among LDA and QDA under A, B "
+            f"and C, the cell with the best block-CV accuracy; ties go to raw counts and to LDA. "
+            f"That is **{L[h_rep]} ({h_rep}), {h_fset}, {h_kind.upper()}**: time-blocked accuracy "
+            f"**{H['acc']:.4f}** [{H['lo']:.4f}, {H['hi']:.4f}] ({H['n_correct']}/{H['n_test']}) against a "
+            f"test floor of {floor:.4f}; block-CV {grid[headline]['cv']:.4f} "
+            f"(folds {', '.join(f'{a:.3f}' for a in grid[headline]['cv_folds'])}); random split "
+            f"{grid[headline]['rnd'][0]:.4f} [{grid[headline]['rnd'][1]:.4f}, {grid[headline]['rnd'][2]:.4f}]. "
+            f"The gap between the random-split mean and the time-blocked number is the optimism that "
+            f"temporal adjacency buys on this data: {grid[headline]['rnd'][0] - H['acc']:+.4f}.")
     out()
+    if p_rep != h_rep:
+        out(f"The persisted models `models/model_lda_real.json` and `models/model_qda_real.json` are "
+            f"fitted under **{L[p_rep]} ({p_rep})**, the shipped representation, not under the rule's "
+            f"{L[h_rep]}: `infer_live.py` feeds {L[p_rep]} on every source and refuses a model fitted on "
+            f"anything else, and switching the shipped representation would move the sim bake-off, the "
+            f"sim-trained models and the streaming path with it. Under {L[p_rep]} the same cell scores "
+            f"{fmt_ci(P)}, {abs(H['n_correct'] - P['n_correct'])} stance(s) apart from the headline; "
+            "that is the deployed model's number.")
+        out()
     if guard_r is not None and "skipped" not in guard_r:
         out(f"With a one-stance guard band between the training and test blocks (training loses its "
             f"last stance per class) the same cell scores {fmt_ci(guard_r)}.")
         out()
+    fb = grid[full_best]
     out(f"The best full-feature cell is {L[full_best[0]]} {full_best[1]} {full_best[2]} at "
-        f"{fmt_ci(grid[full_best]['tb'])} (block-CV {grid[full_best]['cv']:.4f}). It is the better "
-        f"classifier of these activities and it is reported here as such, but it rides on "
-        f"`contact_time_s` and its relatives, whose class medians on this data are "
+        f"{fmt_ci(fb['main'])}"
+        + (f" (within-session {fmt_ci(fb['tb'])})" if multi_session and "skipped" not in fb["tb"]
+           else (f" (block-CV {fb['cv']:.4f})" if not multi_session else ""))
+        + ". It is the better classifier of these activities and it is reported here as such, but "
+        "it rides on `contact_time_s` and its relatives, whose class medians on this data are "
         + ", ".join(f"{lab} {frame_a.loc[frame_a['label'] == lab, 'contact_time_s'].median():.2f} s" for lab in CLASSES)
         + ", i.e. on cadence; it is not comparable with the sim bake-off and does not test the CoP features.")
     out()
     out("Confusion matrix of the headline cell (rows true, columns predicted, order "
-        + ", ".join(CLASSES) + "):")
+        + ", ".join(CLASSES) + ")" + (", pooled over the folds" if multi_session else "") + ":")
     out()
     out("| | " + " | ".join(CLASSES) + " | recall |")
     out("|---|" + "---|" * (len(CLASSES) + 1))
@@ -762,22 +1043,37 @@ def main(argv=None):
     wi = CLASSES.index(worst)
     wq = CLASSES[int(np.argmax([v if j != wi else -1 for j, v in enumerate(H["conf"][wi])]))]
     out(f"Per-class recall " + ", ".join(f"{lab} {H['recall'][lab]:.3f}" for lab in CLASSES)
-        + f": the headline's accuracy comes from the other classes; {worst} test stances are called "
-        f"{wq} {H['conf'][wi][CLASSES.index(wq)]} times out of {sum(H['conf'][wi])}. The table below "
-        f"shows why a time-blocked split does that -- the training block and the test block of one "
-        f"session are not the same distribution:")
+        + f": {worst} test stances are called {wq} {H['conf'][wi][CLASSES.index(wq)]} times out of "
+        f"{sum(H['conf'][wi])}. "
+        + ("The table below shows why a session boundary does that -- the two sessions of one class "
+           "are not the same distribution:" if multi_session else
+           "The table below shows why a time-blocked split does that -- the training block and the "
+           "test block of one session are not the same distribution:"))
     out()
-    out("| feature | class | train block mean | test block mean | shift in test-block sd |")
-    out("|---|---|---|---|---|")
-    for f in h_feats:
-        for lab in CLASSES:
-            tr_v = h_frame.loc[train_idx][h_frame.loc[train_idx, "label"] == lab][f]
-            te_v = h_frame.loc[test_idx][h_frame.loc[test_idx, "label"] == lab][f]
-            sd = te_v.std() if len(te_v) > 1 and te_v.std() > 0 else float("nan")
-            out(f"| {f} | {lab} | {tr_v.mean():.4f} | {te_v.mean():.4f} | {(te_v.mean() - tr_v.mean()) / sd:+.2f} |")
+    if multi_session:
+        out("| feature | class | session | n | mean | sd | shift from the class's other session(s), in pooled sd |")
+        out("|---|---|---|---|---|---|---|")
+        for f in h_feats:
+            for lab in CLASSES:
+                cls = h_frame[h_frame["label"] == lab]
+                pooled_sd = cls[f].std()
+                for ses in spc[lab]:
+                    v = cls.loc[cls["session"] == ses, f]
+                    o = cls.loc[cls["session"] != ses, f]
+                    shift = (v.mean() - o.mean()) / pooled_sd if pooled_sd > 0 and len(o) else float("nan")
+                    out(f"| {f} | {lab} | `{ses}` | {len(v)} | {v.mean():.4f} | {v.std():.4f} | {shift:+.2f} |")
+    else:
+        out("| feature | class | train block mean | test block mean | shift in test-block sd |")
+        out("|---|---|---|---|---|")
+        for f in h_feats:
+            for lab in CLASSES:
+                tr_v = h_frame.loc[train_idx][h_frame.loc[train_idx, "label"] == lab][f]
+                te_v = h_frame.loc[test_idx][h_frame.loc[test_idx, "label"] == lab][f]
+                sd = te_v.std() if len(te_v) > 1 and te_v.std() > 0 else float("nan")
+                out(f"| {f} | {lab} | {tr_v.mean():.4f} | {te_v.mean():.4f} | {(te_v.mean() - tr_v.mean()) / sd:+.2f} |")
     out()
     if "skipped" not in O:
-        out(f"McNemar, {h_kind.upper()} vs {other_kind.upper()} on the same test set: b = {b}, c = {c}"
+        out(f"McNemar, {h_kind.upper()} vs {other_kind.upper()} on the same test stances: b = {b}, c = {c}"
             + (f", exact two-sided p = {p_mc:.4f}" if b + c else " -- no discordant pairs, no test")
             + (f"; the smallest p attainable at b + c = {b + c} is {min(1.0, 2 * 0.5 ** (b + c)):.4f}."
                if b + c else "."))
@@ -794,8 +1090,8 @@ def main(argv=None):
             out(f"| {f} | {lab} | {len(v)} | {v.mean():.4f} | {v.std():.4f} | {v.min():.4f} | {v.median():.4f} | {v.max():.4f} |")
     out()
     out("Fraction of each class's stances (all of them) that fall inside another class's "
-        "p10–p90 training band, per feature. High values are the overlap the classifier cannot "
-        "resolve:")
+        f"p10–p90 band ({'all sessions' if multi_session else 'training block'}), per feature. "
+        "High values are the overlap the classifier cannot resolve:")
     out()
     out("| feature | class | inside " + " band | inside ".join(CLASSES) + " band |")
     out("|---|---|" + "---|" * len(CLASSES))
@@ -806,6 +1102,10 @@ def main(argv=None):
     out()
     out("## 6. Every misclassified test stance")
     out()
+    if multi_session:
+        out("Every stance was tested once, out of its own session, so this is every stance the headline "
+            "cell gets wrong anywhere in the data.")
+        out()
     if not errors:
         out("None.")
     else:
@@ -824,13 +1124,13 @@ def main(argv=None):
             sent = []
             for f in h_feats:
                 em = float(np.mean([r[f] for r in rows]))
-                mt, mq = float(train_means[t][f]), float(train_means[q][f])
+                mt, mq = float(ref_means[t][f]), float(ref_means[q][f])
                 nearer = q if abs(em - mq) < abs(em - mt) else t
-                sent.append(f"`{f}` averages {em:.4f} over these stances against training means "
+                sent.append(f"`{f}` averages {em:.4f} over these stances against {ref_name} "
                             f"{mt:.4f} ({t}) and {mq:.4f} ({q}), nearer to {nearer}")
             s4m = float(np.mean([r["s4_zero_frac"] for r in rows]))
-            sent.append(f"s4 read 0 on {s4m:.0%} of their frames against {float(train_means[t]['s4_zero_frac']):.0%} "
-                        f"for {t} and {float(train_means[q]['s4_zero_frac']):.0%} for {q} in training; on those frames "
+            sent.append(f"s4 read 0 on {s4m:.0%} of their frames against {float(ref_means[t]['s4_zero_frac']):.0%} "
+                        f"for {t} and {float(ref_means[q]['s4_zero_frac']):.0%} for {q} ({ref_name}); on those frames "
                         f"the CoP is a five-sensor centroid, and the counterfactual below puts that at "
                         f"{s4_eff[t][0]:.1f} mm for {t}")
             ct = float(np.mean([r["contact_time_s"] for r in rows]))
@@ -852,22 +1152,26 @@ def main(argv=None):
         f"it reads 0 on {s4_frac['fast']:.0%} (fast), {s4_frac['walk']:.0%} (walk) and "
         f"{s4_frac['shuffle']:.0%} (shuffle) of frames. The CoP shift those zeros are responsible "
         f"for is measured directly: on every such frame the CoP is recomputed with s4 set to the "
-        f"median non-zero s4 count across the four captures ({substitute:.0f} counts) and the "
+        f"median non-zero s4 count across the captures ({substitute:.0f} counts) and the "
         f"difference taken -- {s4_eff['fast'][0]:.1f} / {s4_eff['walk'][0]:.1f} / {s4_eff['shuffle'][0]:.1f} mm "
         f"for fast / walk / shuffle, on a 91 mm wide insole.")
     out()
+    accs = {r: grid[(r, "cop", h_kind)]["main"]["acc"] for r in REPRESENTATIONS}
+    if multi_session:
+        beside = "within-session " + " / ".join(
+            f"{grid[(r, 'cop', h_kind)]['tb']['acc']:.4f}" for r in REPRESENTATIONS)
+    else:
+        beside = "block-CV " + " / ".join(f"{sel[(r, 'cop', h_kind)]:.4f}" for r in REPRESENTATIONS)
     out(f"**Gain match.** Replacing raw counts by gain-matched conductance moves the per-frame CoP by "
         f"{g_eff['fast'][0]:.2f} / {g_eff['walk'][0]:.2f} / {g_eff['shuffle'][0]:.2f} mm on average "
         f"(fast / walk / shuffle), i.e. the s4-zero effect is "
         f"{s4_eff['walk'][0] / g_eff['walk'][0]:.0f}× the gain-match effect on walk. The CoP-only "
-        f"{h_kind.upper()} scores {grid[('raw', 'cop', h_kind)]['tb']['acc']:.4f} under A, "
-        f"{grid[('conductance', 'cop', h_kind)]['tb']['acc']:.4f} under B and "
-        f"{grid[('gain_matched', 'cop', h_kind)]['tb']['acc']:.4f} under C on the time-blocked test "
-        f"(block-CV {cv[('raw', 'cop', h_kind)]:.4f} / {cv[('conductance', 'cop', h_kind)]:.4f} / "
-        f"{cv[('gain_matched', 'cop', h_kind)]:.4f}): the representation moves the answer by at most "
-        f"{max(abs(grid[(r, 'cop', h_kind)]['tb']['acc'] - grid[('raw', 'cop', h_kind)]['tb']['acc']) for r in REPRESENTATIONS) * len(test_idx):.0f} "
-        f"test stance(s). Whatever the representation, the same frames carry the same s4 zeros and "
-        f"the same 62–67 % extrapolation above 824 counts.")
+        f"{h_kind.upper()} scores {accs['raw']:.4f} under A, {accs['conductance']:.4f} under B and "
+        f"{accs['gain_matched']:.4f} under C on the {metric_name} split ({beside}): the representation "
+        f"moves the answer by at most "
+        f"{max(abs(accs[r] - accs['raw']) for r in REPRESENTATIONS) * H['n_test']:.0f} "
+        f"test stance(s) in {H['n_test']}. Whatever the representation, the same frames carry the same s4 "
+        f"zeros and the same extrapolation above 824 counts.")
     out()
     out(f"**Figure-8 turning.** The stance-to-stance spread of the mean medial-lateral CoP position is "
         f"{spread['walk']:.2f} / {spread['fast']:.2f} / {spread['shuffle']:.2f} mm (sd; walk / fast / shuffle). "
@@ -883,6 +1187,10 @@ def main(argv=None):
     for lab in CLASSES:
         out(f"| {lab} | {trends[lab][0]:+.2f} | {trends[lab][2]:+.3f} | {trends[lab][3]:.3f} |")
     out()
+    if multi_session:
+        out("Onset time is seconds into each session's own capture, so sessions of one class overlay "
+            "on the x axis.")
+        out()
     down = [lab for lab in CLASSES if trends[lab][0] < 0 and trends[lab][3] < 0.05]
     if down:
         out(f"Peak total force declines significantly over the minute for {', '.join(down)}, which is "
@@ -905,8 +1213,9 @@ def main(argv=None):
             f"({sim_acc['lda'][1]}/{n_all}), QDA {sim_acc['qda'][0]:.4f} ({sim_acc['qda'][1]}/{n_all}), "
             f"below the {all_floor:.4f} majority floor -- the expected outcome for a model fitted on a "
             f"generator whose constants were co-evolved with the detector. The same recipe retrained "
-            f"on real stances scores {H['acc']:.4f} [{H['lo']:.4f}, {H['hi']:.4f}] on the time-blocked "
-            f"test, and the sim bake-off's {0.9296:.4f} on 270 held-out simulated stances "
+            f"on real stances scores {H['acc']:.4f} [{H['lo']:.4f}, {H['hi']:.4f}] {metric_name} "
+            f"(the shipped {L[p_rep]} model {P['acc']:.4f} [{P['lo']:.4f}, {P['hi']:.4f}]), "
+            f"and the sim bake-off's {0.9296:.4f} on 270 held-out simulated stances "
             f"(`docs/bakeoff.md`) is not a number this data can reproduce or refute: different "
             f"stances, different split, different world.")
     else:
@@ -916,9 +1225,15 @@ def main(argv=None):
     out()
     out("More data would fix:")
     out()
-    out("- **Per-session generalisation.** One session per class means every number here is "
-        "within-session. A second session per class flips this script to leave-one-session-out "
-        "automatically.")
+    if multi_session:
+        out(f"- **Sessions.** {', '.join(f'{lab} {len(spc[lab])}' for lab in CLASSES)} sessions per "
+            "class is the minimum that makes leave-one-session-out possible; every headline interval "
+            "here is wide and one odd session moves it a lot. More sessions narrow it; they do not "
+            "change what it measures.")
+    else:
+        out("- **Per-session generalisation.** One session per class means every number here is "
+            "within-session. A second session per class flips this script to leave-one-session-out "
+            "automatically.")
     out("- **Subjects.** One subject. Nothing here says anything about another foot.")
     out("- **Path.** Everything was walked on a figure-8 in a small space; straight-line gait "
         "and its symmetric loading are unmeasured.")
@@ -938,7 +1253,7 @@ def main(argv=None):
         "anything between them is interpolation.")
     out()
     text = "\n".join(md) + "\n"
-    with open(args.doc, "w") as f:
+    with open(args.doc, "w", encoding="utf-8") as f:
         f.write(text)
     print(f"\nwrote {os.path.relpath(args.doc, REPO)} and {len(os.listdir(args.fig_dir))} figures in "
           f"{time.time() - t_start:.1f} s")
