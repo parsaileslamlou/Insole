@@ -309,6 +309,64 @@ def mcnemar(a_pred, b_pred, yte):
     return b, c, float(stats.binomtest(b, b + c, 0.5).pvalue)
 
 
+def holm(pvals):
+    """Holm-Bonferroni adjusted p-values, returned in the input order.
+
+    Sort ascending, multiply the k-th smallest by (m - k), then enforce
+    monotonicity and cap at 1. Holm controls the family-wise error rate under
+    ARBITRARY dependence between the tests, which is what section 8's family
+    needs: the pooled per-class regressions and the per-session ones are fitted
+    on overlapping stances and are not independent, so a method that assumes
+    independence (Sidak, Benjamini-Hochberg's independence form) would not be
+    valid here and Holm is.
+    """
+    m = len(pvals)
+    order = sorted(range(m), key=lambda i: pvals[i])
+    adj, running = [0.0] * m, 0.0
+    for rank, i in enumerate(order):
+        running = max(running, (m - rank) * float(pvals[i]))
+        adj[i] = min(1.0, running)
+    return adj
+
+
+def overlap_fraction(a, b):
+    """How much of two intervals coincide, as a fraction of each one's length.
+
+    Reported so "the intervals overlap" is a measured statement rather than an
+    impression. -> (overlap_len / len(a), overlap_len / len(b)).
+    """
+    lo, hi = max(a[0], b[0]), min(a[1], b[1])
+    ov = max(0.0, hi - lo)
+    return (ov / (a[1] - a[0]) if a[1] > a[0] else float("nan"),
+            ov / (b[1] - b[0]) if b[1] > b[0] else float("nan"))
+
+
+# The one caveat that has to travel with every pooled interval this script
+# prints, and with every copy of those numbers in README.md, docs/writeup.md
+# and notebooks/demo.ipynb. It names the specific violation rather than
+# gesturing at "small sample": the pooled Wilson interval is computed as if the
+# tested stances were independent draws, and they are not.
+def ci_caveat(n_pooled, n_sessions, n_subjects=1):
+    return (
+        f"**The pooled interval is a LOWER BOUND on the uncertainty, not a confidence "
+        f"interval for a new session.** It is a Wilson interval computed as if the "
+        f"{n_pooled} pooled stances were {n_pooled} independent observations. They are "
+        f"not. They are {n_pooled} stances drawn from {n_sessions} sessions of "
+        f"{n_subjects} subject, and stances within one session share the subject, the "
+        f"day, the shoe, the sensor seating and the figure-8 path, so they are "
+        f"positively correlated; the effective number of independent observations is "
+        f"nearer the number of sessions than the number of stances. Treating "
+        f"correlated observations as independent understates the variance, so the true "
+        f"interval is WIDER than the one printed, by an amount this data cannot "
+        f"quantify: correcting it needs the between-session variance, and "
+        f"{n_sessions} sessions estimate that from {n_sessions} points "
+        f"({n_sessions - 1} degree{'s' if n_sessions != 2 else ''} of freedom), which is "
+        f"not an estimate. The per-fold intervals are reported beside the pooled one "
+        f"for exactly this reason: they are the widest honest statement available here. "
+        f"Read the pooled interval as the floor of the uncertainty, never as its extent."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 3. Mechanism measurements
 # ---------------------------------------------------------------------------
@@ -487,6 +545,41 @@ def fmt_ci(r):
             + (f" ({r['n_excluded']} excl.)" if r.get("n_excluded") else ""))
 
 
+def name_excluded(r, frame):
+    """'`shuffle_03` at t = 0.00 s' for every stance a cell had to drop."""
+    idx = sorted(r.get("excluded", ()))
+    return ", ".join(f"`{frame.at[i, 'session']}` at t = {frame.at[i, 'onset_s']:.2f} s"
+                     for i in idx)
+
+
+def denominators(cop_r, full_r, frame):
+    """The sentence that has to travel with the two headline numbers TOGETHER.
+
+    They are computed on different test sets. The CoP-only headline uses every
+    stance; the full-feature cell drops any stance with a non-finite feature,
+    which on this data is one. Printing the two accuracies side by side without
+    both denominators invites the reader to difference them as if they were
+    measured on the same stances, and they were not. So the denominators, the
+    excluded stance and the reason are repeated at EVERY co-occurrence of the
+    two numbers -- in this document, in README.md, in docs/writeup.md and in
+    notebooks/demo.ipynb -- not only at first mention.
+    """
+    n_cop, n_full = cop_r["n_test"], full_r["n_test"]
+    if n_cop == n_full:
+        return f"Both numbers are on the same n = {n_cop} stances."
+    who = name_excluded(full_r, frame)
+    return (
+        f"**The two headline numbers are on different denominators: the CoP-only "
+        f"{cop_r['acc']:.4f} is on n = {n_cop}, the full-feature {full_r['acc']:.4f} on "
+        f"n = {n_full}.** {n_cop - n_full} stance ({who}) begins at the first frame of its "
+        f"capture, so it has no pre-onset frames, `loading_rate_cps` is undefined there and "
+        f"`features.py` returns NaN rather than imputing a value. Any cell whose feature set "
+        f"includes that feature drops the stance from both sides of the split; the CoP-only "
+        f"cells do not use it and keep it. The stance is named and dropped, never filled in. "
+        f"Differencing {cop_r['acc']:.4f} and {full_r['acc']:.4f} therefore compares two "
+        f"accuracies measured on test sets that are not the same set.")
+
+
 MAX_ERROR_PANELS = 12                                   # per confusion-pair figure
 
 
@@ -507,6 +600,14 @@ def main(argv=None):
                     help="stances dropped from the end of each training block of the "
                          "time-blocked split (default 0)")
     args = ap.parse_args(argv)
+    # The document is written UTF-8 explicitly; the console echo of it must not
+    # depend on the console's codepage. Windows defaults stdout to cp1252, which
+    # cannot encode the U+2212 minus and the U+2192 arrows this document uses,
+    # and the script died on the echo rather than on anything it measures.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):                     # pragma: no cover
+        pass
     os.makedirs(args.fig_dir, exist_ok=True)
     os.makedirs(args.models_dir, exist_ok=True)
     os.makedirs(os.path.dirname(args.doc), exist_ok=True)
@@ -685,11 +786,28 @@ def main(argv=None):
     s4_eff = s4_zero_effect_mm(sessions, substitute)
     g_eff = gain_effect_mm(sessions, gains, fs)
     spread = ml_spread_mm(sessions)
+    # Peak force against onset time. Every such regression this script runs goes
+    # into ONE family and is corrected together: three pooled per-class fits and
+    # one fit per (class, session). Reporting the pooled fits alone and quoting
+    # the smallest p out of them is the multiple-comparisons error this section
+    # used to make, so the family is enumerated here and its size is printed.
     trends = {}
+    trend_rows = []
     for lab in CLASSES:
         sub = frame_a[frame_a["label"] == lab]
         lr = stats.linregress(sub["onset_s"], sub["peak_counts"])
         trends[lab] = (float(lr.slope), float(lr.intercept), float(lr.rvalue), float(lr.pvalue))
+        trend_rows.append(dict(scope="pooled", label=lab, session="both", n=len(sub),
+                               slope=float(lr.slope), r=float(lr.rvalue), p=float(lr.pvalue)))
+    for lab in CLASSES:
+        for ses in spc[lab]:
+            sub = frame_a[(frame_a["label"] == lab) & (frame_a["session"] == ses)]
+            lr = stats.linregress(sub["onset_s"], sub["peak_counts"])
+            trend_rows.append(dict(scope="per session", label=lab, session=ses, n=len(sub),
+                                   slope=float(lr.slope), r=float(lr.rvalue), p=float(lr.pvalue)))
+    for row, q in zip(trend_rows, holm([r["p"] for r in trend_rows])):
+        row["p_holm"] = q
+    n_trend_tests = len(trend_rows)
     for lab in CLASSES:
         print(f"  {lab:8s} s4==0 inside stances {s4_frac[lab]:.1%}  s4-zero CoP effect "
               f"{s4_eff[lab][0]:.1f} mm  gain-match CoP effect {g_eff[lab][0]:.2f} mm (mean)  "
@@ -724,79 +842,116 @@ def main(argv=None):
 
     # -- 5. persist models --------------------------------------------------------
     head("5  PERSIST")
-    # The persisted models are what infer_live.py loads, and it feeds the
-    # SHIPPED representation on every source (it refuses a model whose meta
-    # names another), so they are fitted under SHIPPED even when the rule's
-    # headline cell is a different representation. The document reports both.
+    # Models are persisted under EVERY representation that matters here, each one
+    # labelled with its own, because the model file format no longer decides which
+    # representation the project may ship. Each JSON records "representation" and
+    # insole/infer_live.py reads that field and applies the matching transform,
+    # refusing only a model whose representation it cannot honour -- so the
+    # pre-registered rule's choice can exist as a loadable model instead of only
+    # as a row in a table, and the shipped default is a recorded decision rather
+    # than a consequence of what the loader happened to accept.
+    #
+    # The shipped representation keeps the unsuffixed name (models/model_*_real.json,
+    # infer_live's default, run_demo.sh's path); any other gets a _<rep> suffix.
     p_rep = SHIPPED
-    p_frame = frames[p_rep]
     P = grid[(p_rep, h_fset, h_kind)]["main"]
+    persist_reps = [SHIPPED] + [r for r in (h_rep,) if r != SHIPPED]
     if p_rep != h_rep:
-        print(f"  headline representation is {LETTER[h_rep]} ({h_rep}); persisting under the shipped "
-              f"{LETTER[p_rep]} ({p_rep}): {h_kind} {metric_name} {fmt_ci(P)}")
-    X_all = p_frame[h_feats].to_numpy(float)
-    saved = {}
+        print(f"  rule's headline representation is {LETTER[h_rep]} ({h_rep}); shipped default stays "
+              f"{LETTER[p_rep]} ({p_rep}) by recorded decision: {h_kind} {metric_name} {fmt_ci(P)}")
+    print(f"  persisting under {len(persist_reps)} representation(s): "
+          + ", ".join(f"{LETTER[r]} ({r})" for r in persist_reps))
+    saved = {}                                       # (rep, kind) -> repo-relative path
     n_sess_txt = ", ".join(f"{lab} {len(spc[lab])}" for lab in CLASSES)
-    for kind, fit in (("lda", fit_lda), ("qda", fit_qda)):
-        try:
-            m = fit(X_all, y_all)
-        except (DegenerateClassError, SingularCovarianceError) as e:
-            print(f"  {kind}: not persisted ({e})")
-            continue
-        g = grid[(p_rep, h_fset, kind)]
-        r = g["main"]
-        if "skipped" in r:
-            check = {"skipped": r["skipped"]}
-        elif multi_session:
-            check = {"split": "leave-one-session-out, every stance tested once out of its own session, pooled",
-                     "n_test": int(r["n_test"]), "accuracy": float(r["acc"]),
-                     "n_correct": int(r["n_correct"]),
-                     "wilson95_lo": float(r["lo"]), "wilson95_hi": float(r["hi"]),
-                     "test_floor": float(all_floor),
-                     "folds": [{"held_out": f["held_out"], "n_train": int(f["n_train"]),
-                                "n_test": int(f["n_test"]), "accuracy": float(f["acc"]),
-                                "wilson95_lo": float(f["lo"]), "wilson95_hi": float(f["hi"])}
-                               for f in r["folds"]],
-                     "within_session_time_blocked_accuracy": (float(g["tb"]["acc"])
-                                                              if "skipped" not in g["tb"] else None),
-                     "random_split_mean": float(g["rnd"][0])}
-        else:
-            check = {"split": "time-blocked within session, NOT per-session",
-                     "n_train": int(len(train_idx)), "n_test": int(len(test_idx)),
-                     "accuracy": float(r["acc"]), "n_correct": int(r["n_correct"]),
-                     "wilson95_lo": float(r["lo"]), "wilson95_hi": float(r["hi"]),
-                     "test_floor": float(floor),
-                     "block_cv_accuracy": float(g["cv"]),
-                     "random_split_mean": float(g["rnd"][0])}
-        meta = {
-            "purpose": "classifier trained on the real captures; infer_live.py's default model",
-            "training_data": (f"REAL: data/real, sets {', '.join('_' + s for s in sets)} "
-                              f"(sessions per class: {n_sess_txt}), 60 s per session, one subject, "
-                              "figure-8 path, tethered USB; stances by detector.find_stances + "
-                              "merge_close on raw counts at the committed thresholds"),
-            "sessions": sorted(frame_a["session"].unique().tolist()),
-            "n_rows": int(n_all),
-            "class_counts": {lab: int((y_all == lab).sum()) for lab in CLASSES},
-            "representation": p_rep,
-            "representation_letter": LETTER[p_rep],
-            "gain_match": os.path.relpath(args.gain, REPO) if p_rep == "gain_matched" else None,
-            "headline_cell": f"{LETTER[h_rep]} {h_fset} {h_kind}",
-            "headline_accuracy": float(H["acc"]),
-            "feature_set": h_fset,
-            "features": h_feats,
-            "split": split_name + ("" if multi_session else " -- NOT a per-session split"),
-            "heldout_check": check,
-            "geometry": {"insole_len_mm": D.INSOLE_LEN_MM, "insole_width_mm": D.INSOLE_WIDTH_MM,
-                         "sensor_mm": {k: list(v) for k, v in D.SENSOR_MM.items()}},
-            "detector": {"T_ON": D.T_ON, "T_OFF": D.T_OFF, "MIN_DURATION": D.MIN_DURATION,
-                         "MAX_DURATION": D.MAX_DURATION, "GAP_MERGE": D.GAP_MERGE},
-            "git_hash": git_hash(),
-            "fit_script": "scripts/train_real.py",
-        }
-        path = os.path.join(args.models_dir, f"model_{kind}_real.json")
-        save_model(m, path, meta=meta)
-        saved[kind] = os.path.relpath(path, REPO)
-        print(f"  wrote {saved[kind]}")
+    decision = (
+        f"Shipped default is {LETTER[SHIPPED]} ({SHIPPED}), frozen at stage 20 on the _02 set and "
+        f"left standing at stage 21. On the two-session data the pre-registered rule prefers "
+        f"{LETTER[h_rep]} ({h_rep}) by "
+        f"{abs(grid[(h_rep, h_fset, h_kind)]['main']['n_correct'] - P['n_correct'])} stance(s) in "
+        f"{H['n_test']}, a margin finer than this data can resolve, so the freeze was not "
+        f"disturbed. This is a recorded decision, not a constraint of the file format: "
+        f"infer_live.py loads whichever representation a model names."
+        if h_rep != SHIPPED else
+        f"Shipped default is {LETTER[SHIPPED]} ({SHIPPED}); the pre-registered rule picks it again "
+        f"on the current data. infer_live.py loads whichever representation a model names.")
+    for rep in persist_reps:
+        X_all = frames[rep][h_feats].to_numpy(float)
+        suffix = "" if rep == SHIPPED else f"_{rep}"
+        for kind, fit in (("lda", fit_lda), ("qda", fit_qda)):
+            try:
+                m = fit(X_all, y_all)
+            except (DegenerateClassError, SingularCovarianceError) as e:
+                print(f"  {LETTER[rep]} {kind}: not persisted ({e})")
+                continue
+            g = grid[(rep, h_fset, kind)]
+            r = g["main"]
+            if "skipped" in r:
+                check = {"skipped": r["skipped"]}
+            elif multi_session:
+                check = {"split": "leave-one-session-out, every stance tested once out of its own session, pooled",
+                         "n_test": int(r["n_test"]), "accuracy": float(r["acc"]),
+                         "n_correct": int(r["n_correct"]),
+                         "wilson95_lo": float(r["lo"]), "wilson95_hi": float(r["hi"]),
+                         "wilson95_is_lower_bound_on_uncertainty": True,
+                         "wilson95_caveat": (
+                             f"The pooled interval treats {int(r['n_test'])} stances from "
+                             f"{len(sets)} capture sessions of 1 subject as "
+                             f"{int(r['n_test'])} independent observations. Stances within a "
+                             "session are positively correlated, so the true interval is WIDER by "
+                             "an unknown amount; two sessions cannot estimate the between-session "
+                             "variance. Use the per-fold intervals as the honest spread."),
+                         "test_floor": float(all_floor),
+                         "folds": [{"held_out": f["held_out"], "n_train": int(f["n_train"]),
+                                    "n_test": int(f["n_test"]), "accuracy": float(f["acc"]),
+                                    "wilson95_lo": float(f["lo"]), "wilson95_hi": float(f["hi"])}
+                                   for f in r["folds"]],
+                         "within_session_time_blocked_accuracy": (float(g["tb"]["acc"])
+                                                                  if "skipped" not in g["tb"] else None),
+                         "random_split_mean": float(g["rnd"][0])}
+            else:
+                check = {"split": "time-blocked within session, NOT per-session",
+                         "n_train": int(len(train_idx)), "n_test": int(len(test_idx)),
+                         "accuracy": float(r["acc"]), "n_correct": int(r["n_correct"]),
+                         "wilson95_lo": float(r["lo"]), "wilson95_hi": float(r["hi"]),
+                         "test_floor": float(floor),
+                         "block_cv_accuracy": float(g["cv"]),
+                         "random_split_mean": float(g["rnd"][0])}
+            meta = {
+                "purpose": ("classifier trained on the real captures; infer_live.py's default model"
+                            if rep == SHIPPED else
+                            f"classifier trained on the real captures under representation "
+                            f"{LETTER[rep]} ({rep}), the pre-registered rule's headline "
+                            f"representation; not the shipped default"),
+                "training_data": (f"REAL: data/real, sets {', '.join('_' + s for s in sets)} "
+                                  f"(sessions per class: {n_sess_txt}), 60 s per session, one subject, "
+                                  "figure-8 path, tethered USB; stances by detector.find_stances + "
+                                  "merge_close on raw counts at the committed thresholds"),
+                "sessions": sorted(frame_a["session"].unique().tolist()),
+                "n_rows": int(n_all),
+                "class_counts": {lab: int((y_all == lab).sum()) for lab in CLASSES},
+                "representation": rep,
+                "representation_letter": LETTER[rep],
+                "is_shipped_default": rep == SHIPPED,
+                "representation_decision": decision,
+                "gain_match": os.path.relpath(args.gain, REPO) if rep == "gain_matched" else None,
+                "headline_cell": f"{LETTER[h_rep]} {h_fset} {h_kind}",
+                "headline_accuracy": float(H["acc"]),
+                "feature_set": h_fset,
+                "features": h_feats,
+                "split": split_name + ("" if multi_session else " -- NOT a per-session split"),
+                "heldout_check": check,
+                "geometry": {"insole_len_mm": D.INSOLE_LEN_MM, "insole_width_mm": D.INSOLE_WIDTH_MM,
+                             "sensor_mm": {k: list(v) for k, v in D.SENSOR_MM.items()}},
+                "detector": {"T_ON": D.T_ON, "T_OFF": D.T_OFF, "MIN_DURATION": D.MIN_DURATION,
+                             "MAX_DURATION": D.MAX_DURATION, "GAP_MERGE": D.GAP_MERGE},
+                "git_hash": git_hash(),
+                "fit_script": "scripts/train_real.py",
+            }
+            path = os.path.join(args.models_dir, f"model_{kind}_real{suffix}.json")
+            save_model(m, path, meta=meta)
+            saved[(rep, kind)] = os.path.relpath(path, REPO)
+            print(f"  wrote {saved[(rep, kind)]}  ({LETTER[rep]} {rep}"
+                  + (", shipped default" if rep == SHIPPED else "") + ")")
 
     # -- 6. the document ------------------------------------------------------------
     head("6  DOCUMENT -> " + os.path.relpath(args.doc, REPO))
@@ -856,12 +1011,30 @@ def main(argv=None):
     if h_rep == SHIPPED:
         verdict = f"On the current data the rule picks {L[SHIPPED]} again ({rule_txt})."
     else:
-        d = abs(grid[(h_rep, 'cop', h_kind)]['main']['n_correct'] - grid[(SHIPPED, 'cop', h_kind)]['main']['n_correct'])
-        verdict = (f"On the current data the rule prefers {L[h_rep]} ({h_rep}) by {d} stance(s) in "
-                   f"{H['n_test']} ({rule_txt}); the shipped representation is left at {L[SHIPPED]}, "
-                   "because switching it moves the sim bake-off frame, the sim-trained models and the "
-                   "streaming path with it, and the persisted real models are fitted under "
-                   f"{L[SHIPPED]} so that `infer_live.py` accepts them (section 4 gives both numbers).")
+        hn = grid[(h_rep, "cop", h_kind)]["main"]
+        pn = grid[(SHIPPED, "cop", h_kind)]["main"]
+        d = abs(hn["n_correct"] - pn["n_correct"])
+        oh, op = overlap_fraction((hn["lo"], hn["hi"]), (pn["lo"], pn["hi"]))
+        verdict = (
+            f"On the current data the rule prefers {L[h_rep]} ({h_rep}) over {L[SHIPPED]} "
+            f"({SHIPPED}) by {d} stance(s) in {H['n_test']} -- {d / H['n_test']:.1%} -- "
+            f"({rule_txt}). **The rule's deciding margin is finer than the resolution of the data "
+            f"it is deciding on.** One stance either way is {1 / H['n_test']:.1%} of the test set, "
+            f"so the whole decision rests on {d} stance{'s' if d != 1 else ''}; the two cells' "
+            f"Wilson intervals, [{hn['lo']:.4f}, {hn['hi']:.4f}] for {L[h_rep]} and "
+            f"[{pn['lo']:.4f}, {pn['hi']:.4f}] for {L[SHIPPED]}, overlap over {min(oh, op):.0%} of "
+            f"their length; and those intervals are themselves lower bounds on the uncertainty "
+            f"(section 3). **{L[h_rep]} and {L[SHIPPED]} are statistically indistinguishable on "
+            f"this data**, and which of them the rule ranks first at this sample size is arbitrary. "
+            f"**{L[SHIPPED]} remains the shipped representation and is FROZEN -- retained as a "
+            f"pre-existing freeze taken at stage 20 on the `_02` set, not as this rule's verdict.** "
+            f"The rule did not choose {L[SHIPPED]} here. It chose {L[h_rep]}, by a margin that "
+            f"means nothing, and the existing freeze was left standing because switching the "
+            f"shipped representation moves the sim bake-off frame, the sim-trained models and the "
+            f"streaming path together -- for a change this data cannot show to be an improvement. "
+            f"Any statement that the rule selected {L[SHIPPED]} is wrong. Both numbers are in "
+            f"section 4, and real models are now persisted under both representations, each "
+            f"labelled with its own (section 5).")
     out(f"**Shipped representation: {L[SHIPPED]} ({SHIPPED})** -- `insole.representations.SHIPPED`, "
         f"the one `insole/infer_live.py` feeds on every source, `scripts/bakeoff.py` builds the sim "
         f"frame under, and the persisted models are fitted on. It was chosen at stage 20 by the "
@@ -899,6 +1072,8 @@ def main(argv=None):
         out()
         out(f"Pooled n_test = {n_all} (every stance once), majority floor = {all_floor:.4f} "
             f"({all_floor_n}/{n_all}, always `{all_floor_lab}`).")
+        out()
+        out(ci_caveat(n_all, len(sets)))
         out()
         out(f"Reported beside it so the within-session optimism is visible: the **{tb_name}**, "
             "pooled over sessions (" + ", ".join(
@@ -996,6 +1171,8 @@ def main(argv=None):
             "cells, so the headline carries that much selection optimism. The gap between the "
             "within-session number and the leave-one-session-out number is what a session boundary "
             f"costs on this data: {grid[headline]['tb']['acc'] - H['acc']:+.4f}.")
+        out()
+        out(ci_caveat(H["n_test"], len(sets)))
     else:
         out(f"Rule, fixed before any result was seen: CoP-only features; among LDA and QDA under A, B "
             f"and C, the cell with the best block-CV accuracy; ties go to raw counts and to LDA. "
@@ -1008,13 +1185,18 @@ def main(argv=None):
             f"temporal adjacency buys on this data: {grid[headline]['rnd'][0] - H['acc']:+.4f}.")
     out()
     if p_rep != h_rep:
-        out(f"The persisted models `models/model_lda_real.json` and `models/model_qda_real.json` are "
-            f"fitted under **{L[p_rep]} ({p_rep})**, the shipped representation, not under the rule's "
-            f"{L[h_rep]}: `infer_live.py` feeds {L[p_rep]} on every source and refuses a model fitted on "
-            f"anything else, and switching the shipped representation would move the sim bake-off, the "
-            f"sim-trained models and the streaming path with it. Under {L[p_rep]} the same cell scores "
-            f"{fmt_ci(P)}, {abs(H['n_correct'] - P['n_correct'])} stance(s) apart from the headline; "
-            "that is the deployed model's number.")
+        out(f"**Both representations are persisted, each labelled with its own.** "
+            f"`models/model_{{lda,qda}}_real.json` are fitted under **{L[p_rep]} ({p_rep})**, the "
+            f"shipped default; `models/model_{{lda,qda}}_real_{h_rep}.json` under **{L[h_rep]} "
+            f"({h_rep})**, the rule's headline representation. Every model JSON records a "
+            f"`representation` field and `insole/infer_live.py` reads it and applies the matching "
+            f"transform, refusing only a model whose representation it cannot honour (an absent "
+            f"field, an unknown name, or {L['gain_matched']} with `--gain none`) -- there is no "
+            f"silent fallback. **The shipped default is therefore a recorded decision, not a "
+            f"consequence of what the loader would accept.** Under {L[p_rep]} the headline cell "
+            f"scores {fmt_ci(P)}, {abs(H['n_correct'] - P['n_correct'])} stance(s) apart from the "
+            f"{L[h_rep]} headline; that is the deployed model's number, and the two are "
+            f"indistinguishable on this data (section 2).")
         out()
     if guard_r is not None and "skipped" not in guard_r:
         out(f"With a one-stance guard band between the training and test blocks (training loses its "
@@ -1029,6 +1211,8 @@ def main(argv=None):
         "it rides on `contact_time_s` and its relatives, whose class medians on this data are "
         + ", ".join(f"{lab} {frame_a.loc[frame_a['label'] == lab, 'contact_time_s'].median():.2f} s" for lab in CLASSES)
         + ", i.e. on cadence; it is not comparable with the sim bake-off and does not test the CoP features.")
+    out()
+    out(denominators(H, fb["main"], frame_a))
     out()
     out("Confusion matrix of the headline cell (rows true, columns predicted, order "
         + ", ".join(CLASSES) + ")" + (", pooled over the folds" if multi_session else "") + ":")
@@ -1182,26 +1366,112 @@ def main(argv=None):
     out()
     out(f"![peak vs onset]({os.path.relpath(os.path.join(args.fig_dir, 'peak_vs_onset.png'), os.path.dirname(args.doc))})")
     out()
-    out("| class | slope (raw counts per s of capture) | r | p |")
-    out("|---|---|---|---|")
-    for lab in CLASSES:
-        out(f"| {lab} | {trends[lab][0]:+.2f} | {trends[lab][2]:+.3f} | {trends[lab][3]:.3f} |")
+    out(f"**{n_trend_tests} tests, corrected together.** Peak total force is regressed on stance "
+        f"onset time once per class pooled over that class's sessions ({len(CLASSES)} tests) and "
+        f"once per (class, session) ({n_trend_tests - len(CLASSES)} tests) -- "
+        f"{n_trend_tests} in all, every one of them run and every one of them looked at. That is "
+        "the family, so it is corrected as a family: reporting these fits and then quoting the "
+        "smallest p out of them without a correction is exactly the multiple-comparisons error, "
+        "and the uncorrected p values below mean nothing on their own. The correction is "
+        "Holm-Bonferroni, which controls the family-wise error rate under arbitrary dependence "
+        "between the tests -- necessary here, because the pooled fits and the per-session fits are "
+        "fitted on overlapping stances and are not independent.")
+    out()
+    out("| scope | class | session | n | slope (raw counts per s of capture) | r | p | p (Holm, "
+        f"m = {n_trend_tests}) |")
+    out("|---|---|---|---|---|---|---|---|")
+    for r in trend_rows:
+        out(f"| {r['scope']} | {r['label']} | `{r['session']}` | {r['n']} | {r['slope']:+.2f} | "
+            f"{r['r']:+.3f} | {r['p']:.4f} | {r['p_holm']:.4f} |")
     out()
     if multi_session:
-        out("Onset time is seconds into each session's own capture, so sessions of one class overlay "
-            "on the x axis.")
+        out("Onset time is seconds into each session's own capture, so the sessions of one class "
+            "overlay on the x axis of the figure and of the pooled fits. Stress relaxation acts "
+            "within one continuous capture, so the per-session fits are the physically direct test "
+            "and the pooled ones mix two captures; both are reported because both were run.")
         out()
-    down = [lab for lab in CLASSES if trends[lab][0] < 0 and trends[lab][3] < 0.05]
-    if down:
-        out(f"Peak total force declines significantly over the minute for {', '.join(down)}, which is "
-            f"the direction FSR stress relaxation predicts (`docs/calibration_notes.md`: counts fell "
-            f"~31 % in 76 s under constant load). Whether it is relaxation or the subject slowing "
-            f"cannot be separated from one capture.")
+    nominal = [r for r in trend_rows if r["p"] < 0.05]
+    survivors = [r for r in trend_rows if r["p_holm"] < 0.05]
+    rises = [r for r in nominal if r["slope"] > 0]
+    falls = [r for r in nominal if r["slope"] < 0]
+
+    def name(r):
+        return (f"{r['label']} pooled" if r["scope"] == "pooled" else f"{r['label']} `{r['session']}`")
+
+    if not nominal:
+        out(f"No fit reaches p < 0.05 even uncorrected, so nothing here survives correction over "
+            f"{n_trend_tests} tests. Peak force shows no detectable trend across a 60 s capture in "
+            "either direction.")
     else:
-        out("No class shows a significant decline of peak force over its 60 s capture at p < 0.05. "
-            "That is not evidence against FSR stress relaxation -- the bench measurement was under "
-            "constant load, and gait loads each sensor for a fraction of a second at a time -- it "
-            "says the drift does not visibly enter one minute of walking.")
+        out("Uncorrected, "
+            + "; ".join(f"{name(r)} {'rises' if r['slope'] > 0 else 'falls'} at "
+                        f"{r['slope']:+.2f} counts/s (p = {r['p']:.4f}, Holm p = {r['p_holm']:.4f})"
+                        for r in nominal)
+            + ". "
+            + (f"After correction over the {n_trend_tests} tests, **none of them survives at "
+               f"p < 0.05** -- the smallest adjusted p in the whole family is "
+               f"{min(r['p_holm'] for r in trend_rows):.4f}"
+               if not survivors else
+               f"After correction over the {n_trend_tests} tests, "
+               + ", ".join(f"{name(r)} survives at Holm p = {r['p_holm']:.4f}" for r in survivors))
+            + ".")
+    out()
+    if falls:
+        out("**The direction FSR stress relaxation predicts.** A decline over a capture is what "
+            "`docs/calibration_notes.md` measured on the bench: counts fall ~31 % in 76 s under "
+            "constant load, recovering with a ~20 min time constant. "
+            + ("It is not significant here after correction, so this data neither confirms nor "
+               "contradicts that finding."
+               if not [r for r in falls if r["p_holm"] < 0.05] else
+               "It survives correction here, which is consistent with that finding, though "
+               "relaxation and a subject slowing down cannot be separated by these captures."))
+        out()
+    if rises:
+        out(f"**A rise runs opposite to the project's best-established physical finding, so it does "
+            f"not get reported flatly.** {', '.join(name(r) for r in rises)} "
+            f"{'rise' if len(rises) > 1 else 'rises'} rather than falls. FSR stress relaxation is "
+            "measured, reproduced across two independent bench sessions, and monotone in rest "
+            "interval (`docs/calibration_notes.md`); it predicts peak counts *falling* across a "
+            "capture at constant applied force. An apparent contradiction of it needs more than "
+            "one uncorrected p value. Two explanations fit the observation and this data does not "
+            "separate them:")
+        out()
+        out("1. **The subject accelerated across the session.** Applied force is not constant in "
+            "gait -- the subject can push harder as the capture goes on, and a rising applied "
+            "force can outrun a falling sensitivity. Nothing was recorded that would measure "
+            "applied force independently of the sensor whose drift is in question, so this "
+            "explanation cannot be checked against the captures that produced it.")
+        n_pos = sum(1 for r in trend_rows if r["slope"] > 0)
+        out(f"2. **A multiple-comparisons artifact.** {n_trend_tests} tests were run; "
+            f"{n_pos} of the {n_trend_tests} fitted slopes are positive and "
+            f"{n_trend_tests - n_pos} negative, which is what noise around zero looks like. "
+            + (f"After Holm correction nothing in the family reaches p < 0.05 "
+               f"(smallest adjusted p {min(r['p_holm'] for r in trend_rows):.4f}), so the "
+               "correction is sufficient on its own to account for the rise."
+               if not survivors else
+               "Some tests survive correction, so this explanation does not cover all of them."))
+        out()
+        out("**Verdict.** "
+            + ("The corrected p values kill the result. After Holm correction over the "
+               f"{n_trend_tests} tests in the family, no peak-force trend in this data is "
+               "significant at p < 0.05 in either direction, the rise included. It is reported "
+               "here as a measurement that did not reach significance, not as a finding, and it is "
+               "not evidence against stress relaxation. Separating a real acceleration from noise "
+               "needs an independent measure of applied force during gait, which this hardware "
+               "does not have. **Hardware-blocked.**"
+               if not survivors else
+               "At least one trend survives correction; see the table for which, and treat the "
+               "two explanations above as unresolved."))
+    elif nominal and not rises:
+        out("**Verdict.** "
+            + ("Nothing survives correction; no peak-force trend in this data is significant at "
+               "p < 0.05." if not survivors else
+               "See the table for what survives correction."))
+    else:
+        out("**Verdict.** No peak-force trend in this data is significant at p < 0.05, before or "
+            "after correction. That is not evidence against FSR stress relaxation -- the bench "
+            "measurement was under constant load, and gait loads each sensor for a fraction of a "
+            "second at a time -- it says the drift does not visibly enter one minute of walking.")
     out()
     out("## 9. Simulator versus real")
     out()

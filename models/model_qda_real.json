@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "created_utc": "2026-09-04T05:17:27Z",
+  "created_utc": "2026-09-04T06:49:27Z",
   "kind": "qda",
   "classes": [
     "fast",
@@ -82,6 +82,8 @@
     },
     "representation": "conductance",
     "representation_letter": "B",
+    "is_shipped_default": true,
+    "representation_decision": "Shipped default is B (conductance), frozen at stage 20 on the _02 set and left standing at stage 21. On the two-session data the pre-registered rule prefers A (raw) by 2 stance(s) in 224, a margin finer than this data can resolve, so the freeze was not disturbed. This is a recorded decision, not a constraint of the file format: infer_live.py loads whichever representation a model names.",
     "gain_match": null,
     "headline_cell": "A cop qda",
     "headline_accuracy": 0.6071428571428571,
@@ -98,6 +100,8 @@
       "n_correct": 134,
       "wilson95_lo": 0.5328769868022516,
       "wilson95_hi": 0.6602396345697894,
+      "wilson95_is_lower_bound_on_uncertainty": true,
+      "wilson95_caveat": "The pooled interval treats 224 stances from 2 capture sessions of 1 subject as 224 independent observations. Stances within a session are positively correlated, so the true interval is WIDER by an unknown amount; two sessions cannot estimate the between-session variance. Use the per-fold intervals as the honest spread.",
       "test_floor": 0.41517857142857145,
       "folds": [
         {
@@ -165,7 +169,7 @@
       "MAX_DURATION": 200,
       "GAP_MERGE": 12
     },
-    "git_hash": "676c347",
+    "git_hash": "f96ff56",
     "fit_script": "scripts/train_real.py"
   }
 }

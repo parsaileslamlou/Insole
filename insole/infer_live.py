@@ -55,18 +55,39 @@ than "nothing arriving". The counters that matter most:
 
 What the model sees
 -------------------
-Features are computed on the SHIPPED representation
-(insole.representations.SHIPPED, conductance x = counts / (4095 - counts)
-per channel), exactly as the batch path (representations.features_under on
-a read_serial CSV) computes them and exactly as the training frames were
-built -- scripts/bakeoff.py for the sim models, scripts/train_real.py for the
-real ones. The detector still runs on raw counts. The gain match IS applied
-every frame -- in conductance space, via calibration.apply_gain_match -- and
-its output is carried in the buffer and drives the extrap counter, but it
-does not feed the features: on the real captures it scored no better than
-plain conductance while extrapolating on most loaded frames
-(docs/real_results.md). A model whose meta names a different representation
-is refused at startup rather than fed a distribution it was not trained on.
+THE MODEL DECIDES, not this script. Every persisted model records the input
+representation it was fitted on in `meta.representation`
+(insole/representations.py: A raw counts, B conductance
+x = counts / (4095 - counts) per channel, C gain-matched conductance). This
+script reads that field and applies the matching transform, so a model fitted
+under any of the three loads and runs here. That is deliberate: the file
+format must not be what decides which representation the project can ship.
+Before, features were always computed under representations.SHIPPED and a
+model naming anything else was rejected, which meant the persisted models had
+to be fitted under B for this script to accept them -- the loader silently
+constraining the science. It no longer does. SHIPPED is now only the default
+model's representation, a recorded decision (docs/real_results.md section 5),
+and `--model models/model_qda_real_raw.json` runs the A-fitted model correctly
+rather than being refused.
+
+There is NO silent fallback. A model is refused at startup, naming both
+sides, when its representation cannot be honoured:
+
+    * `meta.representation` absent -- a pre-stage-20 fit. What it was trained
+      on is unrecorded, so feeding it anything is a guess.
+    * an unknown name -- not one of insole.representations.REPRESENTATIONS.
+    * "gain_matched" under `--gain none` -- C is conductance times the
+      per-channel corrections, and with no gain document there are no
+      corrections to apply. Substituting identity gains would silently
+      demote C to B.
+
+The detector always runs on raw counts whatever the model's representation
+(T_ON / T_OFF are in counts). The gain match is applied every frame in
+conductance space via calibration.apply_gain_match; its output is carried in
+the buffer and drives the extrap counter. Under A and B it does not reach the
+features -- on the real captures C scored no better than plain B while
+extrapolating on most loaded frames (docs/real_results.md). Under C it is what
+the features are computed on.
 
 The default model is the one trained on the real captures
 (scripts/train_real.py -> models/model_qda_real.json, leave-one-session-out
@@ -104,7 +125,9 @@ from insole import detector as D
 from insole import read_serial as RS
 from insole.discriminant import load_model, predict
 from insole.features import cop_features, cop_trajectory, stance_features
-from insole.representations import LETTER, SHIPPED, transform_frames
+from insole.representations import (
+    LETTER, REPRESENTATIONS, SHIPPED, gains_from_doc, transform_frames,
+)
 
 from insole.paths import MODELS, REPO as _REPO
 
@@ -219,21 +242,77 @@ class RunningMedianDt:
         return (lo_val + hi_val) / 2.0 / 1_000_000.0
 
 
-def features_for(rows, dt):
+def features_for(rows, dt, rep=SHIPPED, gains=None):
     """The batch feature functions applied to one stance's frames.
 
     `rows` is the (ts_us, vals) list for frames start..end INCLUSIVE, vals
-    being raw counts; they are transformed to the shipped representation
-    here, once, on the way in. The notebook-lifted extractors slice
-    [start:end], which drops the last frame; passing (0, n-1) here
-    reproduces that exactly.
+    being raw counts; they are transformed to `rep` here, once, on the way in.
+    `rep` is the loaded model's own `meta.representation`, not a constant --
+    resolve_representation() has already checked it can be honoured, and
+    `gains` is non-None exactly when rep is "gain_matched". The
+    notebook-lifted extractors slice [start:end], which drops the last frame;
+    passing (0, n-1) here reproduces that exactly.
     """
     n = len(rows)
-    df = pd.DataFrame(transform_frames([r[1] for r in rows], SHIPPED), columns=D.SENSOR_COLS)
+    df = pd.DataFrame(transform_frames([r[1] for r in rows], rep, gains),
+                      columns=D.SENSOR_COLS)
     total = df[D.SENSOR_COLS].sum(axis=1)
     out = stance_features(total, dt, 0, n - 1)
     out.update(cop_features(cop_trajectory(df, 0, n - 1)))
     return out
+
+
+class RepresentationError(Exception):
+    """A model names an input representation this run cannot honour.
+
+    Carries the message printed at startup. Raised, never swallowed: the
+    alternative to refusing is feeding the classifier a distribution it was
+    not fitted on, which produces confident labels off a silent unit change.
+    """
+
+
+def resolve_representation(meta, model_path, gain_doc, gain_arg):
+    """(rep, gains) for a loaded model, or raise RepresentationError.
+
+    The model's `meta.representation` decides, and this function's only job is
+    to say whether this run can honour it. It never substitutes one
+    representation for another -- there is no fallback path, silent or
+    otherwise, because every fallback here is a wrong answer delivered
+    quietly. Both sides are named in every message: what the model asks for,
+    and why this run cannot give it.
+
+    `gain_doc` is the loaded gain-match document or None when --gain none was
+    passed; `gain_arg` is the flag's text, for the message.
+    """
+    rep = meta.get("representation")
+    if rep is None:
+        raise RepresentationError(
+            f"FAIL: {model_path} records no representation.\n"
+            f"      Its meta has no 'representation' field, so what the features were\n"
+            f"      computed on when it was fitted is not recorded anywhere. That is a\n"
+            f"      pre-stage-20 fit. Feeding it raw counts, conductance or gain-matched\n"
+            f"      conductance would be a guess, and a wrong guess produces confident\n"
+            f"      labels off a silent unit change, so this script refuses instead.\n"
+            f"      Refit it: scripts/train_real.py (real captures) or scripts/fit_model.py\n"
+            f"      (simulated). Both stamp the representation into the model.")
+    if rep not in REPRESENTATIONS:
+        raise RepresentationError(
+            f"FAIL: {model_path} names representation {rep!r}, which this build does not have.\n"
+            f"      insole.representations.REPRESENTATIONS is {list(REPRESENTATIONS)}.\n"
+            f"      Either the model comes from a newer tree than this checkout, or the\n"
+            f"      field is corrupt. This script will not guess which transform was meant.")
+    if rep == "gain_matched" and gain_doc is None:
+        raise RepresentationError(
+            f"FAIL: {model_path} was fitted on representation {LETTER[rep]} ({rep}), and\n"
+            f"      this run has no gain match: --gain {gain_arg!r}.\n"
+            f"      {LETTER[rep]} is conductance multiplied by the per-channel corrections in\n"
+            f"      models/gain_match.json. With no gain document there are no corrections,\n"
+            f"      and applying identity gains instead would silently demote {LETTER[rep]} to\n"
+            f"      {LETTER['conductance']} (conductance) while still reporting {LETTER[rep]}.\n"
+            f"      Either drop --gain none, or load a model fitted under "
+            f"{LETTER['raw']} or {LETTER['conductance']}.")
+    gains = gains_from_doc(gain_doc) if rep == "gain_matched" else None
+    return rep, gains
 
 
 # ---------------------------------------------------------------------------
@@ -299,15 +378,18 @@ def main(argv=None):
     model = load_model(args.model)
     meta = model.get("meta", {})
     feat_names = meta.get("features", ["cop_path_len", "cop_displacement"])
-    model_rep = meta.get("representation")
-    if model_rep is not None and model_rep != SHIPPED:
-        print(f"FAIL: {args.model} was fitted on representation {model_rep!r}; this "
-              f"script feeds {SHIPPED!r} (insole.representations.SHIPPED). Refit it.")
-        return 2
 
     gm = None
     if args.gain.lower() != "none":
         gm = C.load_gain_match(args.gain)
+
+    # The model's own representation drives the feature path from here on.
+    # Refused rather than approximated -- see resolve_representation.
+    try:
+        model_rep, model_gains = resolve_representation(meta, args.model, gm, args.gain)
+    except RepresentationError as exc:
+        print(exc)
+        return 2
 
     # -- banner -------------------------------------------------------------
     print(f"infer_live: source={args.source}"
@@ -336,10 +418,10 @@ def main(argv=None):
     print(f"detector  : T_ON={D.T_ON} T_OFF={D.T_OFF} MIN_DURATION={D.MIN_DURATION} "
           f"MAX_DURATION={D.MAX_DURATION} GAP_MERGE={D.GAP_MERGE}  "
           f"(a run > MAX_DURATION is DISCARDED, not clipped)")
-    print(f"features  : representation {LETTER[SHIPPED]} ({SHIPPED}) on every source; "
-          f"the detector sees raw counts"
-          + (f"; model fitted on {model_rep!r}" if model_rep else
-             "; model meta names no representation (pre-stage-20 fit)"))
+    print(f"features  : representation {LETTER[model_rep]} ({model_rep}), read from the model's "
+          f"meta and applied on every source; the detector sees raw counts"
+          + ("" if model_rep == SHIPPED else
+             f"  [NOT the shipped default {LETTER[SHIPPED]} ({SHIPPED})]"))
     if gm is not None:
         print("gain match: " + "  ".join(f"s{i}={gm['corrections'][i]:.4f}" for i in range(6))
               + f"  applied to x = counts/({gm['fs_counts']:g} - counts); "
@@ -385,7 +467,7 @@ def main(argv=None):
             # slots absent before each frame after the first. A gap before
             # frame s itself is outside the stance.
             gap_frames = sum(r[4] for r in islice(buf, s - first_idx + 1, e - first_idx + 1))
-            ft = features_for(rows, dts.dt_s())
+            ft = features_for(rows, dts.dt_s(), model_rep, model_gains)
             timers.tick("feature", t0)
             # predict ------------------------------------------------------
             t0 = perf_counter()

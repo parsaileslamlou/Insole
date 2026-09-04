@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "created_utc": "2026-09-04T06:49:27Z",
-  "kind": "lda",
+  "kind": "qda",
   "classes": [
     "fast",
     "shuffle",
@@ -9,16 +9,16 @@
   ],
   "means": [
     [
-      1.035831313492097,
-      0.6259369387800274
+      1.0064847681177878,
+      0.6164562588386453
     ],
     [
-      0.9577725898910618,
-      0.3873320838755673
+      0.943511695618983,
+      0.38249024137134113
     ],
     [
-      1.093843618605377,
-      0.5445856983506816
+      1.0665777837030905,
+      0.5389446806040374
     ]
   ],
   "priors": [
@@ -31,18 +31,40 @@
     64,
     67
   ],
-  "cov": [
+  "covs": [
     [
-      0.09255348831462325,
-      0.011400651771421837
+      [
+        0.061069738075990185,
+        0.008271137707027764
+      ],
+      [
+        0.008271137707027764,
+        0.008080340400646577
+      ]
     ],
     [
-      0.011400651771421837,
-      0.014232785303447177
+      [
+        0.057085913489301254,
+        0.009902319660056632
+      ],
+      [
+        0.009902319660056632,
+        0.011724908942361775
+      ]
+    ],
+    [
+      [
+        0.1574984361755036,
+        0.016955396027647663
+      ],
+      [
+        0.016955396027647663,
+        0.023708739412087426
+      ]
     ]
   ],
   "meta": {
-    "purpose": "classifier trained on the real captures; infer_live.py's default model",
+    "purpose": "classifier trained on the real captures under representation A (raw), the pre-registered rule's headline representation; not the shipped default",
     "training_data": "REAL: data/real, sets _02, _03 (sessions per class: fast 2, shuffle 2, walk 2), 60 s per session, one subject, figure-8 path, tethered USB; stances by detector.find_stances + merge_close on raw counts at the committed thresholds",
     "sessions": [
       "fast02",
@@ -58,9 +80,9 @@
       "shuffle": 64,
       "walk": 67
     },
-    "representation": "conductance",
-    "representation_letter": "B",
-    "is_shipped_default": true,
+    "representation": "raw",
+    "representation_letter": "A",
+    "is_shipped_default": false,
     "representation_decision": "Shipped default is B (conductance), frozen at stage 20 on the _02 set and left standing at stage 21. On the two-session data the pre-registered rule prefers A (raw) by 2 stance(s) in 224, a margin finer than this data can resolve, so the freeze was not disturbed. This is a recorded decision, not a constraint of the file format: infer_live.py loads whichever representation a model names.",
     "gain_match": null,
     "headline_cell": "A cop qda",
@@ -74,10 +96,10 @@
     "heldout_check": {
       "split": "leave-one-session-out, every stance tested once out of its own session, pooled",
       "n_test": 224,
-      "accuracy": 0.5669642857142857,
-      "n_correct": 127,
-      "wilson95_lo": 0.5014855704601743,
-      "wilson95_hi": 0.6301848532025808,
+      "accuracy": 0.6071428571428571,
+      "n_correct": 136,
+      "wilson95_lo": 0.5418941041955623,
+      "wilson95_hi": 0.6687785736648459,
       "wilson95_is_lower_bound_on_uncertainty": true,
       "wilson95_caveat": "The pooled interval treats 224 stances from 2 capture sessions of 1 subject as 224 independent observations. Stances within a session are positively correlated, so the true interval is WIDER by an unknown amount; two sessions cannot estimate the between-session variance. Use the per-fold intervals as the honest spread.",
       "test_floor": 0.41517857142857145,
@@ -90,9 +112,9 @@
           ],
           "n_train": 111,
           "n_test": 113,
-          "accuracy": 0.6017699115044248,
-          "wilson95_lo": 0.5095962472638719,
-          "wilson95_hi": 0.687251450816264
+          "accuracy": 0.6194690265486725,
+          "wilson95_lo": 0.5274170845635211,
+          "wilson95_hi": 0.7036649957914209
         },
         {
           "held_out": [
@@ -102,13 +124,13 @@
           ],
           "n_train": 113,
           "n_test": 111,
-          "accuracy": 0.5315315315315315,
-          "wilson95_lo": 0.4392042173016677,
-          "wilson95_hi": 0.6217493047669904
+          "accuracy": 0.5945945945945946,
+          "wilson95_lo": 0.5015775740046178,
+          "wilson95_hi": 0.6812829922013564
         }
       ],
-      "within_session_time_blocked_accuracy": 0.6555555555555556,
-      "random_split_mean": 0.6238888888888888
+      "within_session_time_blocked_accuracy": 0.6666666666666666,
+      "random_split_mean": 0.6272222222222221
     },
     "geometry": {
       "insole_len_mm": 274.0,
