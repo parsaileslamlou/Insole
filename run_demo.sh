@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Simulator-only demonstration of the pipeline: generate -> log -> segment,
-# features, predict with the persisted classifier. Deterministic (the stream
+# features, predict with the persisted SIM-TRAINED classifier (the stream is
+# simulated, so the sim model is the right one; infer_live defaults to the
+# real-trained model otherwise). Deterministic (the stream
 # is seeded), leaves nothing behind, prints one DEMO OK line, exits nonzero on
 # any failure.
 #
@@ -24,8 +26,8 @@ echo "1/3 generate   python -m insole.gait_gen --out walk.txt --noise-seed 1"
 echo "2/3 log        python -m insole.read_serial walk.txt walk.csv"
 "$PYTHON" -m insole.read_serial "$work/walk.txt" "$work/walk.csv" | tail -1
 
-echo "3/3 predict    python -m insole.infer_live walk.txt --label walk --quiet --out preds.csv"
-out=$("$PYTHON" -m insole.infer_live "$work/walk.txt" --label walk --quiet --out "$work/preds.csv")
+echo "3/3 predict    python -m insole.infer_live walk.txt --model models/model_lda.json --label walk --quiet --out preds.csv"
+out=$("$PYTHON" -m insole.infer_live "$work/walk.txt" --model models/model_lda.json --label walk --quiet --out "$work/preds.csv")
 echo "$out" | grep -E "^(model|features|stances completed|predictions|agreement)"
 
 stances=$(echo "$out" | sed -n 's/^stances completed=\([0-9]*\).*/\1/p')

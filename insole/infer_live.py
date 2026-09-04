@@ -68,10 +68,12 @@ plain conductance while extrapolating on most loaded frames
 (docs/real_results.md). A model whose meta names a different representation
 is refused at startup rather than fed a distribution it was not trained on.
 
-The persisted model is fitted on SIMULATED sessions (scripts/fit_model.py). On the
-real _02 captures the same recipe scored far below the majority floor
-(sim_vs_real.py D2). Predictions on real gait are a plumbing check until a
-real training set exists, and the banner says so on every run.
+The default model is the one trained on the real captures
+(scripts/train_real.py -> models/model_qda_real.json, leave-one-session-out
+over two sessions per class; docs/real_results.md). The sim-trained model
+(scripts/fit_model.py -> models/model_lda.json) stays reachable with --model;
+on real captures it scores below the majority floor. The banner names the
+kind of model loaded and what its predictions are good for.
 
 Equivalence
 -----------
@@ -107,7 +109,8 @@ from insole.representations import LETTER, SHIPPED, transform_frames
 from insole.paths import MODELS, REPO as _REPO
 
 REPO = str(_REPO)
-DEFAULT_MODEL = str(MODELS / "model_lda.json")
+DEFAULT_MODEL = str(MODELS / "model_qda_real.json")   # trained on the real captures
+SIM_MODEL = str(MODELS / "model_lda.json")             # sim-trained, --model for the simulator demo
 DEFAULT_GAIN = str(MODELS / "gain_match.json")
 
 STATUS_EVERY_S = 5.0
@@ -122,7 +125,7 @@ S4 = D.SENSOR_COLS.index("s4")
 # Line sources beyond read_serial's three: a CSV capture replayed as frames
 # ---------------------------------------------------------------------------
 def frame_line(seq, ts_us, vals):
-    """Encode one frame exactly as the firmware does (framespec.md section 4)."""
+    """Encode one frame exactly as the firmware does (docs/frame_spec.md section 4)."""
     nums = [int(seq), int(ts_us)] + [int(v) for v in vals]
     return "INS," + ",".join(str(n) for n in nums) + f",{sum(nums) % 256}"
 
@@ -248,7 +251,9 @@ def build_parser():
     p.add_argument("--duration", type=float, default=None, metavar="SECONDS",
                    help=f"live capture length (default: read_serial.DURATION_S = {RS.DURATION_S})")
     p.add_argument("--model", default=DEFAULT_MODEL,
-                   help="persisted classifier from scripts/fit_model.py (default: models/model_lda.json)")
+                   help="persisted classifier (default: models/model_qda_real.json, trained on the "
+                        "real captures by scripts/train_real.py; models/model_lda.json is the "
+                        "sim-trained one from scripts/fit_model.py)")
     p.add_argument("--gain", default=DEFAULT_GAIN,
                    help="relative gain match JSON (default: models/gain_match.json); 'none' to skip")
     p.add_argument("--out", default=None,
@@ -312,15 +317,22 @@ def main(argv=None):
     print(f"model     : {os.path.relpath(args.model, REPO) if args.model.startswith(REPO) else args.model}"
           f"  kind={model['kind']}  classes={[str(c) for c in model['classes']]}  features={feat_names}")
     hc = meta.get("heldout_check", {})
-    if hc:
+    simulated = str(meta.get("training_data", "")).upper().startswith("SIMULATED")
+    if hc and "accuracy" in hc:
         print(f"            trained on {meta.get('n_rows')} rows / "
-              f"{len(meta.get('sessions', []))} sessions; held-out check "
-              f"{hc.get('accuracy', float('nan')):.4f} "
+              f"{len(meta.get('sessions', []))} sessions; {hc.get('split', 'held-out check')}: "
+              f"{hc['accuracy']:.4f} "
               f"[{hc.get('wilson95_lo', float('nan')):.4f}, {hc.get('wilson95_hi', float('nan')):.4f}] "
-              f"on {hc.get('n_test')} SIMULATED stances")
-    print("WARNING   : the model is fitted on simulated gait. On real captures this")
-    print("            recipe scored below the majority floor (sim_vs_real.py D2).")
-    print("            Predictions on real gait are a plumbing check, not a result.")
+              f"on {hc.get('n_test')} {'SIMULATED' if simulated else 'real'} stances"
+              + (f", majority floor {hc['test_floor']:.4f}" if "test_floor" in hc else ""))
+    if simulated:
+        print("WARNING   : the model is fitted on simulated gait. On real captures this")
+        print("            recipe scored below the majority floor (docs/real_results.md, section 9).")
+        print("            Predictions on real gait are a plumbing check, not a result.")
+    else:
+        print("NOTE      : the model is fitted on the real captures (one subject, figure-8 path,")
+        print("            docs/real_results.md). On simulated frames its labels are a plumbing")
+        print("            check, not a result; --model models/model_lda.json is the sim-trained one.")
     print(f"detector  : T_ON={D.T_ON} T_OFF={D.T_OFF} MIN_DURATION={D.MIN_DURATION} "
           f"MAX_DURATION={D.MAX_DURATION} GAP_MERGE={D.GAP_MERGE}  "
           f"(a run > MAX_DURATION is DISCARDED, not clipped)")
