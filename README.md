@@ -125,7 +125,7 @@ pip install -e ".[analysis,test,notebook]"
    python scripts/bakeoff.py
    ```
 
-5. Run the tests:
+5. Run the tests (step 4 first: two checks read the frame it builds):
 
    ```
    python -m pytest -q                 # 46 passed
@@ -415,9 +415,11 @@ python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 
 Every file's checks print PASS/FAIL lines and return their counts; the
 `test_*` wrappers pytest collects assert that nothing failed, so a red check
-fails pytest too. `tests/test_infer_live.py` and `tests/test_train_real.py`
-need `data/sim/features_sessions.csv`, which `python scripts/bakeoff.py`
-builds; without it one check per file reports the missing file and the fix.
+fails pytest too. **Run `python scripts/bakeoff.py` before pytest in a fresh
+clone**: `tests/test_infer_live.py` and `tests/test_train_real.py` read
+`data/sim/features_sessions.csv`, which that script builds and `.gitignore`
+excludes, and without it one check in each file fails with the command to
+run (2 failed, 44 passed).
 
 ## Open items
 
