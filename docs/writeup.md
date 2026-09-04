@@ -24,9 +24,10 @@ non-circular test.
 0.4296) CoP-only LDA scores 0.9185 and QDA 0.9296 (`scripts/bakeoff.py`). The
 same models on the 224 real stances score 0.3795 and 0.3438, below the 0.4152
 floor. Retrained on the real captures, two sessions per class, every stance
-tested out of its own session, the CoP-only headline is QDA on raw counts,
-0.6071 [0.5419, 0.6688] on n = 224; the shipped conductance model scores
-0.5982, two stances away and statistically indistinguishable from it. Adding
+tested out of its own session, the CoP-only headline is QDA on raw counts (variant A),
+0.6071 [0.5419, 0.6688] on n = 224; the shipped conductance model (B) scores
+0.5982, two stances away and statistically indistinguishable from it. B is
+what a clone runs by default, so 0.5982 is the shipped number. Adding
 contact time reaches 0.7578 [0.6976, 0.8094] on n = 223 — one `shuffle_03`
 stance starts at frame 0, its loading rate undefined, dropped not imputed —
 and that cell rides on cadence, not the CoP. **Every pooled interval here is a
@@ -63,7 +64,7 @@ was built, tested and fault-injected before hardware arrived. Reality
 corrected me: the sensors relax by a third within a minute, my stance ceiling
 cut real walking in half, and one channel rarely turns on. On simulation the
 classifier scores 0.93; retrained on real data and tested out of session,
-0.61, and it calls walking fast 39 times in 67, the confusion the
+0.60 as shipped, and it calls walking fast 39 times in 67, the confusion the
 simulator predicted once cadence is removed. The limits are honest: one
 subject, two sessions per class, ±15 mm sensor positions, intervals that are
 floors rather than ranges, and a gain match that never reaches the classifier.

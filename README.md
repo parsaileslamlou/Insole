@@ -13,8 +13,9 @@ tuned against.
 **Start here:** [notebooks/demo.ipynb](notebooks/demo.ipynb) runs the whole
 pipeline without hardware, spec to heatmap, in a few seconds, with the real
 captures beside the simulated ones; its outputs are committed so it reads on
-GitHub. [docs/writeup.md](docs/writeup.md) is the project in 700 words, and
-`./run_demo.sh` runs generate → log → predict on the simulator in one command.
+GitHub. [docs/writeup.md](docs/writeup.md) is the project in about 700
+words, and `./run_demo.sh` runs generate → log → predict on the simulator in
+one command.
 
 ## Data path
 
@@ -61,7 +62,7 @@ GitHub. [docs/writeup.md](docs/writeup.md) is the project in 700 words, and
 | [scripts/](scripts/) | Programs that are run, never imported: `train_real.py` (the real-data classifier and its analysis), `bakeoff.py`, `fit_model.py`, `analyze_real.py`, `sim_vs_real.py`, `sweep_max_duration.py`, `capture_calibration.py`, `compare_captures.py`, `capture_noise.py`, `noise_stats.py`, `bench_capture.sh` (the live bench, recording each run's exit code; needs the board). |
 | [tests/](tests/) | Every test. Each runs directly (PASS/FAIL lines, nonzero exit on failure) and under pytest. |
 | [notebooks/](notebooks/) | [demo.ipynb](notebooks/demo.ipynb), the run-all demonstration (start here); [insole.ipynb](notebooks/insole.ipynb), the analysis pipeline (Colab-ready). |
-| [docs/](docs/) | [writeup.md](docs/writeup.md) (the project in 700 words), [hardware_notes.md](docs/hardware_notes.md) (board, bench, failure modes, what the live bench showed), [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
+| [docs/](docs/) | [writeup.md](docs/writeup.md) (the project in about 700 words), [hardware_notes.md](docs/hardware_notes.md) (board, bench, failure modes, what the live bench showed), [frame_spec.md](docs/frame_spec.md) (the wire contract), [calibration_notes.md](docs/calibration_notes.md), [sim_vs_real.md](docs/sim_vs_real.md), [bakeoff.md](docs/bakeoff.md), [real_results.md](docs/real_results.md). |
 | [models/](models/) | `gain_match.json` (single-point relative gain match), `model_lda.json`, `model_qda.json` (sim-trained classifiers), `model_lda_real.json`, `model_qda_real.json` (real captures under B, conductance — `model_qda_real.json` is `infer_live`'s default), `model_lda_real_raw.json`, `model_qda_real_raw.json` (the same fits under A, raw counts). Every model records its own `representation`, and `infer_live` applies the one the model names. |
 | [data/real/](data/real/) | Twelve real captures in three sets: `_02` and `_03` (two sessions per class, training/evaluation) and `_01` (failure evidence). Read its README first. |
 | [data/sim/](data/sim/) | The five committed simulator fixtures `sim_*.txt`; generated CSVs and sessions land here too and are ignored. |
@@ -69,7 +70,6 @@ GitHub. [docs/writeup.md](docs/writeup.md) is the project in 700 words, and
 | [cal_data/](cal_data/) | 42 bench calibration captures and their manifest. |
 | [figures/](figures/) | Rendered comparison figures. |
 | [firmware/insole/](firmware/insole/) | The Arduino sketch and its header. |
-| [githooks/](githooks/) | `commit-msg`, which refuses any commit message carrying an AI-tool attribution trailer. Enable it once per clone: `git config core.hooksPath githooks`. |
 | [run_demo.sh](run_demo.sh) | The simulator demo in one command; prints `DEMO OK` or exits nonzero. |
 
 Two invocation forms, used consistently everywhere: package programs run as
@@ -85,15 +85,7 @@ Every command below was executed as written. Python 3.10 or newer.
 git clone https://github.com/parsaileslamlou/Insole.git && cd Insole
 python3 -m venv .venv && source .venv/bin/activate      # Windows Git Bash: source .venv/Scripts/activate
 pip install -e ".[analysis,test,notebook]"
-git config core.hooksPath githooks                       # once per clone; see below
 ```
-
-That last line enables `githooks/commit-msg`, which refuses a commit message
-carrying an AI-tool attribution trailer. `core.hooksPath` is per-clone config
-and is not carried by a clone, so it has to be set again in each one. The
-commit log here is solo-authored and says so; the hook is what makes that a
-control rather than a habit, since a settings file can be edited and an
-instruction inside a session can be countermanded inside the same session.
 
 1. Generate a 60 s simulated walk (seeded, so the numbers below reproduce):
 
@@ -141,8 +133,8 @@ instruction inside a session can be countermanded inside the same session.
 5. Run the tests (step 4 first: two checks read the frame it builds):
 
    ```
-   python -m pytest -q                 # 47 passed
-   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (331 across the nine files)
+   python -m pytest -q                 # 47 passed (47 with or without step 4)
+   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (331 across the nine files once step 4 has run; 326 + 2 SKIP before it)
    ```
 
 6. Or do steps 1–3 in one command, deterministic, leaving nothing behind
@@ -367,8 +359,13 @@ leave-one-session-out: fold k holds out session k of every class, every stance
 is tested once out of its own session, and the headline pools the two folds.
 Headline, chosen by a rule fixed before any result was seen (CoP-only
 features; the representation and model, LDA or QDA, with the best pooled
-leave-one-session-out accuracy): raw counts, QDA, 0.6071 [0.5419, 0.6688]
-(136/224) against a 0.4152 floor, folds 0.6195 and 0.5946.
+leave-one-session-out accuracy): **representation A (raw counts), QDA,
+0.6071 [0.5419, 0.6688] (136/224)** against a 0.4152 floor, folds 0.6195 and
+0.5946. **That cell is not what this repository ships.** The shipped default
+is representation B (conductance); the same cell under B scores 0.5982
+[0.5329, 0.6602] (134/224), and B's is the number a clone of this repository
+reproduces as it stands. 0.6071 is reachable only by loading the A-fitted
+models (`models/model_qda_real_raw.json`), never from the shipped default.
 
 > **The pooled interval is a LOWER BOUND on the uncertainty, not a confidence
 > interval for a new session.** It is a Wilson interval computed as if the 224
@@ -387,19 +384,21 @@ leave-one-session-out accuracy): raw counts, QDA, 0.6071 [0.5419, 0.6688]
 > every pooled interval quoted below and in
 > [docs/real_results.md](docs/real_results.md).
 
-The shipped model
-is the same cell under conductance, the representation the streaming path
-feeds: 0.5982 [0.5329, 0.6602] (134/224), two stances apart. Walk recall is
-0.209: 39 of the 67 walk stances are called fast, which is the fast-versus-walk
-confusion the simulator predicted for CoP features once cadence is removed,
-now confirmed on hardware; shuffle is what the CoP separates. The
-within-session time-blocked split, the previous headline recipe, gives 0.6667
-on the same cell, so a session boundary costs about six points here. With all
-seven features (contact time and its relatives included) the best cell reaches
-0.7578 [0.6976, 0.8094] (169/223) out of session, riding on cadence.
+**The shipped number is 0.5982 [0.5329, 0.6602] (134/224)**: the same cell
+under representation B (conductance), the representation the streaming path
+feeds and `models/model_qda_real.json` is fitted on, two stances from A's.
+Walk recall is 0.209: 39 of the 67 walk stances are called fast, which is the
+fast-versus-walk confusion the simulator predicted for CoP features once
+cadence is removed, now confirmed on hardware; shuffle is what the CoP
+separates. The within-session time-blocked split, the previous headline
+recipe, gives 0.6667 on the same cell, so a session boundary costs about six
+points here. With all seven features (contact time and its relatives
+included) the best cell reaches 0.7578 [0.6976, 0.8094] (169/223) out of
+session, riding on cadence.
 
 > **The two headline numbers are on different denominators: the CoP-only 0.6071
-> is on n = 224, the full-feature 0.7578 on n = 223.** One stance (`shuffle_03`
+> (representation A, raw counts; B is 0.5982 on the same 224) is on n = 224, the
+> full-feature 0.7578 on n = 223.** One stance (`shuffle_03`
 > at t = 0.00 s) begins at the first frame of its capture, so it has no pre-onset
 > frames, `loading_rate_cps` is undefined there and `features.py` returns NaN
 > rather than imputing a value. Any cell whose feature set includes that feature
@@ -441,7 +440,7 @@ says so.
 ## Tests
 
 ```
-python -m pytest -q                 # everything, from the repository root (46 functions)
+python -m pytest -q                 # everything, from the repository root (47 functions)
 python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 ```
 
@@ -459,84 +458,129 @@ python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 
 Every file's checks print PASS/FAIL lines and return their counts; the
 `test_*` wrappers pytest collects assert that nothing failed, so a red check
-fails pytest too. **A fresh clone is green before anything is generated**:
+fails pytest too. The PASS-line column above is the count once
+`scripts/bakeoff.py` has run.
+
+**The two counts move independently, and only the script-suite one moves.**
 `tests/test_infer_live.py` and `tests/test_train_real.py` read
 `data/sim/features_sessions.csv`, which `scripts/bakeoff.py` builds and
-`.gitignore` excludes, and without it one check in each file prints `SKIP`
-with the command that produces it and counts as neither a pass nor a failure.
-Run `python scripts/bakeoff.py` first to have those two checks actually run —
-they compare the persisted sim frame against a fresh rebuild, which is worth
-having — but pytest is 47 passed either way. A missing generated artifact and
-a real failure are no longer reported as the same thing.
+`.gitignore` excludes. Without it each file prints one `SKIP` line naming the
+command that produces it, and a skipped check counts as neither a pass nor a
+failure. The two `SKIP` lines are script-suite checks, not pytest tests:
+pytest collects 47 functions and passes 47 either way, because the wrappers
+assert only that nothing *failed*.
 
-## Open items
+| Run directly (`python tests/test_*.py`) | Fresh clone | After `python scripts/bakeoff.py` |
+| --- | --- | --- |
+| `tests/test_infer_live.py` | 80 PASS, 1 SKIP | 81 PASS |
+| `tests/test_train_real.py` | 33 PASS, 1 SKIP | 37 PASS |
+| the other seven files | 213 PASS | 213 PASS |
+| **total** | **326 PASS, 0 FAIL, 2 SKIP** | **331 PASS, 0 FAIL, 0 SKIP** |
+| `python -m pytest -q` | 47 passed | 47 passed |
 
+The two `SKIP` lines gate five checks between them, not two: the
+`test_train_real.py` skip stands in front of four. `scripts/fit_model.py` is
+not needed for either — `models/model_lda.json` is committed — so
+`python scripts/bakeoff.py` alone takes a fresh clone from 326 to 331.
+**A fresh clone is green before anything is generated**, and a missing
+generated artifact and a real failure are not reported as the same thing.
+
+## Closing state
+
+This section is final. The two lists below replace the open-items list: the
+first is what this project accepts and will not fix, the second is what is
+parked on another machine. Neither is a to-do list.
+
+### Accepted limitations
+
+Each of these is understood, measured where it can be measured, and left as
+it stands. The sentence after each says why it is accepted rather than fixed.
+
+- **The 2026-09-03 bench exit codes were derived, not recorded.** The four
+  runs were typed by hand and their logs end at `read_serial`'s summary line,
+  so the `exit` column was reconstructed by feeding each log's counters back
+  through `read_serial.exit_code` (a pure function of those counters, 0 for
+  all four); it cannot see an exception, a signal, or a failed write after the
+  summary printed (`docs/hardware_notes.md`). *Accepted because re-recording
+  them means re-running the bench on hardware, and the reconstruction is sound
+  for everything the counters describe — `bench_capture.sh` now records the
+  status directly, so the gap is closed forward and only these four runs carry
+  it.*
 - **BLE stalls when the board is powered from the host PC's USB cable.** The
-  stage-14 bench passed on all four runs (hardware section), but only with the
-  board on battery for the BLE two; two attempts on PC power dropped the link
-  ~210 ms after the connection-parameter request. Three variables changed
-  before the passing run, so the cause is narrowed to the Windows-side central,
-  not identified. Powering from a battery is the workaround.
-- **Two sessions per class, one subject.** The `_03` set (2026-09-03) added a
-  second 60 s trial per activity, and `scripts/train_real.py` now switches
-  itself to leave-one-session-out on it. When the set landed the script's
-  stance guard summed stances per label against the `_02` totals and aborted
-  on `walk: 67 stances, expected 35`; the guard now pins every training-grade
-  capture by file and refuses one it does not know, so adding a session means
-  pinning it (`SESSIONS` in the script, `REAL_COUNTS` in
-  `tests/test_stances.py`). Two sessions is the minimum that makes a
-  per-session split possible, not a comfortable margin: with two folds one odd
-  session moves the number a lot, and it is still one subject on one path.
+  stage-14 bench passed on all four runs, but the BLE two only on battery; two
+  attempts on PC power dropped the link ~210 ms after the connection-parameter
+  request. Three variables changed before the passing run, so the cause is
+  narrowed to the Windows-side central, not identified. *Accepted because
+  isolating it needs a second central and a protocol capture on hardware this
+  project no longer has time on, and a battery is a complete workaround for
+  the only use the insole has.*
+- **Detector thresholds are simulator-swept.** `T_ON`, `T_OFF`,
+  `MIN_DURATION` and `GAP_MERGE` were chosen against streams whose constants
+  were co-evolved with them; only `MAX_DURATION` was set from real data.
+  *Accepted because re-sweeping them honestly needs labelled real stances from
+  more than one subject, which this dataset cannot supply — and the circularity
+  is disclosed rather than hidden, which is the most this data supports.*
+- **One subject, two sessions per class.** Two sessions is the minimum that
+  makes a per-session split possible, not a comfortable margin: with two folds
+  one odd session moves the number a lot, and it is still one subject on one
+  figure-8 path. Weight-shift was never collected, although the collection plan
+  listed it. *Accepted because the fix is a data-collection campaign, not a code
+  change, and every number in this repository is already reported against the
+  session-disjoint split with its denominator named.*
+- **The calibration gain match never reaches the classifier.** The features see
+  conductance (representation B); the gain-matched representation C scores the
+  same as B on the two-session data (0.5982 both) while extrapolating above 824
+  counts on most loaded walking frames, and does not hold below about 5 N.
+  *Accepted because shipping C would be a default change plus a refit for a
+  move of at most two stances in 224 — a change this data cannot show to be an
+  improvement — so the gain match drives the extrapolation counter only.*
+- **Every pooled interval is a lower bound on the uncertainty, not a
+  confidence interval for a new session.** The Wilson intervals treat 224
+  stances from 2 sessions of 1 subject as 224 independent observations; they
+  are positively correlated, so the true interval is wider. *Accepted because
+  correcting it needs the between-session variance, and two sessions estimate
+  that from two points — one degree of freedom, which is not an estimate; the
+  per-fold intervals are reported beside every pooled one for exactly this
+  reason.*
 - **The pre-registered rule now prefers raw counts, by a margin finer than the
-  data it is deciding on.** On the two-session data the CoP-only headline rule
-  picks A (raw) over B (conductance) by two stances in 224 — 0.9 % — and the two
-  cells' Wilson intervals, [0.5419, 0.6688] for A and [0.5329, 0.6602] for B,
-  overlap over 93 % of their length. Those intervals are themselves lower bounds
-  on the uncertainty. **A and B are statistically indistinguishable on this
-  data**, and which one the rule ranks first at this sample size is arbitrary.
-  **B remains shipped and is FROZEN — retained as a pre-existing freeze taken at
-  stage 20 on the `_02` set, not as this rule's verdict.** The rule did not
-  choose B here; it chose A, by a margin that means nothing, and the freeze was
-  left standing because switching the shipped representation moves the sim
-  bake-off frame, the sim-trained models and the streaming path together, for a
-  change this data cannot show to be an improvement. Any statement that the rule
-  selected B is wrong. Both numbers, and real models fitted under both
-  representations, are in [docs/real_results.md](docs/real_results.md).
-- **Weight-shift was never collected**, although the collection plan listed it.
-- **The gain match extrapolates** above 824 counts, which is most loaded
-  walking frames, and does not hold below about 5 N, where the channels'
-  activation thresholds diverge (s4 read 0 counts at 2.58 N while s5 read 239
-  at 2.49 N).
-- **s4's activation threshold** makes the CoP a five-sensor centroid. Two
-  measurements of the cost, and they are not the same measurement: over all
-  moving frames of the `_02` captures, s4 reads 0 on 46–56 % of them and the
-  common-substitute bias is 33.6–36.7 mm (`scripts/analyze_real.py` C4/C4b);
-  over the frames *inside kept stances* across both sessions it is 20–35 % of
-  frames and a 12–14 mm shift (`docs/real_results.md` section 7). Its zeros
-  are below-threshold readings, never imputed or dropped.
-- **Sensor coordinates carry ±15 mm** on a 91 mm wide insole; a jig would
-  tighten them.
-- **Detector thresholds are simulator-swept.** `T_ON`, `T_OFF`, `MIN_DURATION`
-  and `GAP_MERGE` were chosen against streams whose constants were co-evolved
-  with them; only `MAX_DURATION` has been set from real data, and only real
-  data can exercise it.
-- **The features see conductance (representation B), not the gain match.**
-  Stage 20 chose it on the real captures by a pre-registered rule; the
-  gain-matched representation C scores the same as B on the two-session data
-  (0.5982 both) while extrapolating on most loaded frames, so the gain match
-  drives the extrapolation counter only and the calibration stage never
-  reaches the classifier. This is now a **recorded decision, not a consequence
-  of the file format**: every model JSON carries a `representation` field,
-  `infer_live` applies whichever one the model names, and real models are
-  persisted under both A and B. Shipping C would be a change of the default in
-  `insole.representations.SHIPPED` plus a refit — no longer a loader change. On
-  this data it would move the headline by at most two stances in 224. A
-  decision, not a finding.
+  data it is deciding on.** It picks A (raw) over B (conductance) by two
+  stances in 224 — 0.9 % — and the two cells' Wilson intervals, [0.5419,
+  0.6688] for A and [0.5329, 0.6602] for B, overlap over 93 % of their length.
+  **A and B are statistically indistinguishable on this data. B remains
+  shipped and is FROZEN**, retained as a pre-existing freeze taken at stage 20,
+  not as this rule's verdict — any statement that the rule selected B is wrong.
+  *Accepted because switching the shipped representation moves the sim bake-off
+  frame, the sim-trained models and the streaming path together, for a change
+  this data cannot show to be an improvement.*
+- **s4's activation threshold makes the CoP a five-sensor centroid.** Over all
+  moving frames of the `_02` captures s4 reads 0 on 46–56 % of them, a
+  common-substitute bias of 33.6–36.7 mm (`scripts/analyze_real.py` C4/C4b);
+  inside kept stances it is 20–35 % of frames and a 12–14 mm shift
+  (`docs/real_results.md` section 7). Its zeros are below-threshold readings,
+  never imputed or dropped. *Accepted because it is a property of the sensor at
+  low load, not a bug in the pipeline, and the cost is measured in millimetres
+  in two places rather than corrected away.*
+- **Sensor coordinates carry ±15 mm** on a 91 mm wide insole. *Accepted because
+  tightening them needs a jig and a rebuild of the insole, and the figure is
+  quoted beside every CoP number rather than dropped.*
 - **Firmware, left as is:** `Serial.printf` from core 0 can interleave with
   frame writes from core 1 (rare, MTU transition only); the BLE gather loop's
-  size-guard discard neither increments `bleDropped` nor advances the cursor
-  (cannot trigger at current sizes).
+  size-guard discard neither increments `bleDropped` nor advances the cursor.
+  *Accepted because neither can trigger at current frame sizes, and both are
+  recorded here rather than patched blind on a board that is no longer on the
+  bench.*
 - **`force_n` / `sigma_F` in the calibration manifest** bake estimator choices
   (g = 9.81, range/√12) into an append-only file, and the recorded ~2 % force
   uncertainty understates the real one: the operator reading the scale
-  dominates.
+  dominates. *Accepted because the file is append-only by design and the raw
+  counts it derives from are all still there, so a better estimator can be
+  applied downstream without rewriting history.*
+
+### Pending elsewhere
+
+Not open questions about this repository — work that exists on another
+machine and is not represented here.
+
+- **`cal-wls-local` and `wip/ble-transport` are unswept**, on the other
+  machine and not on this remote.
+- **The original finish log is unrecovered.**

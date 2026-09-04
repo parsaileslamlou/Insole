@@ -179,7 +179,7 @@ Monitor first; one program per port (session note).
 - **Firmware, left as is.** `Serial.printf` from core 0 can interleave with
   frame writes from core 1 (rare, MTU transition only); the BLE gather loop's
   size-guard discard neither increments `bleDropped` nor advances the cursor
-  (cannot trigger at current sizes). Both listed in the README's open items.
+  (cannot trigger at current sizes). Both listed under the README's accepted limitations.
 
 ## What the live bench showed
 
