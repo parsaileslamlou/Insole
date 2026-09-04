@@ -46,6 +46,57 @@ correction is applied in **conductance space** -- it multiplies
 `x = counts / (FS_COUNTS - counts)`, never the raw counts. Applying it to counts
 is a different and wrong correction.
 
+## The estimator: unweighted OLS in conductance
+
+The line fit that `calibration.fit_sensor` ships is **ordinary least squares,
+unweighted**, linear in conductance:
+
+```
+x = c / (FS_COUNTS - c)          # c = counts, FS_COUNTS = 4095
+force_n = a * x + b              # a = Sxy / Sxx, b = mean(y) - a * mean(x)
+```
+
+Every point in the sweep carries equal weight. `r2` is the ordinary
+coefficient of determination over the points kept, and a channel whose `r2`
+falls below `MIN_R2` (0.90) is flagged `poor_fit`.
+
+A **weighted variant was evaluated and rejected.** The argument for it is real:
+propagating a uniform count noise through the conductance transform gives
+`sigma_x = sigma_c * FS_COUNTS / (FS_COUNTS - c)^2`, so the noise in `x` grows
+quadratically while `x` itself grows linearly, and unweighted OLS therefore
+hands the top of the sweep more leverage than its information justifies. The
+variant reweights each point by `1 / sigma_x^2`. It was not adopted, for three
+reasons measured on the captures this repository actually contains:
+
+1. **It moves the slopes without changing any decision.** Weighting shifts the
+   fitted slope by 2.5-7.1% on five of the six channels.
+2. **It changes no flag.** Every channel that the shipped OLS fit marks
+   `poor_fit` is still `poor_fit` under the weighted fit -- all five of them.
+   No channel crosses `MIN_R2` in either direction, so nothing downstream sees
+   a different answer.
+3. **Its motivating number does not hold here.** The variant's own commit
+   message justifies the change with a 19.9x information ratio between the
+   lightest and heaviest load. That figure is computed for a hypothetical
+   100..3000 g ladder, not for the sweep on disk. On the captures that exist
+   the ratio is **1.9-2.3x** -- an order of magnitude smaller, and small enough
+   that the leverage imbalance the weighting corrects is not the dominant error
+   here. The limitations above -- a single-force anchor, a working range above
+   everything sampled, and an unverified `FS_COUNTS` -- all dominate it.
+
+So the weighting is a defensible refinement to an estimator whose error budget
+is not currently limited by its weights. It was left out to keep the shipped
+fit the simpler of two estimators that agree on every flag.
+
+That evaluation is not on any branch of this repository. It lives in a local
+git bundle, `insole_archive_branches.bundle`, on the `cal-wls-local` branch
+inside it, together with the sweep-planning and range-reporting work built on
+top of it. Restore it with:
+
+```
+git bundle verify insole_archive_branches.bundle
+git clone insole_archive_branches.bundle wls && cd wls && git checkout cal-wls-local
+```
+
 ## Limitations
 
 1. **Anchored at one force, ~12 N, on a nonlinear response.** The match was

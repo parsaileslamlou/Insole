@@ -141,11 +141,16 @@ def file_lines(path):
             yield raw.strip()
 
 
-def ble_lines(device_name=None, duration_s=None, stall_s=None):
+def ble_lines(device_name=None, duration_s=None, stall_s=None, _runner=None):
     """Live BLE source.
 
     All asyncio and threading is confined to this function. It returns a plain
     synchronous generator of strings, exactly like the other two sources.
+
+    `_runner` replaces the BLE session with a caller-supplied coroutine taking
+    the output queue. It exists so the failure path below can be exercised
+    without a radio, and without bleak installed; nothing in the capture path
+    passes it.
 
     Reassembly contract:
       * A notification may carry several whole lines, one line, or a fragment
@@ -161,7 +166,6 @@ def ble_lines(device_name=None, duration_s=None, stall_s=None):
     import asyncio
     import threading
     import queue as _queue
-    from bleak import BleakScanner, BleakClient
 
     device_name = _resolve(device_name, BLE_NAME)
     duration_s = _resolve(duration_s, DURATION_S)
@@ -171,6 +175,10 @@ def ble_lines(device_name=None, duration_s=None, stall_s=None):
     SENTINEL = object()
 
     async def _run():
+        # Imported here rather than at the top of ble_lines() so a caller that
+        # supplies _runner never needs bleak on the machine.
+        from bleak import BleakScanner, BleakClient
+
         buf = bytearray()
 
         def on_notify(_handle, data):
@@ -246,6 +254,11 @@ def ble_lines(device_name=None, duration_s=None, stall_s=None):
 
         # buf may still hold a partial line here. It is dropped on purpose.
 
+    # The reader thread's exception, parked until the consumer has drained
+    # everything the thread managed to queue before it died. A list because a
+    # nested function can append to one without a `nonlocal` declaration.
+    failure = []
+
     def _pump():
         """Run _run() and guarantee the consumer is released, however it ends.
 
@@ -256,11 +269,18 @@ def ble_lines(device_name=None, duration_s=None, stall_s=None):
         The sentinel is now queued in exactly one place, a finally, so no
         future exit path can miss it.
 
+        Releasing the consumer is not the same as reporting the failure. The
+        exception is therefore parked rather than swallowed: printing it here
+        reports it from a thread nobody is watching, and the consumer re-raises
+        it below, so a dead radio produces a traceback and a nonzero exit
+        status instead of a short capture that looks clean.
+
         The reassembly contract in on_notify() is untouched.
         """
         try:
-            asyncio.run(_run())
-        except Exception as exc:                 # noqa: BLE001 - report, never hang
+            asyncio.run(_run() if _runner is None else _runner(out))
+        except BaseException as exc:             # noqa: BLE001 - park it, never hang
+            failure.append(exc)
             print(f"BLE: capture thread failed: {exc!r}")
         finally:
             out.put(SENTINEL)
@@ -279,9 +299,14 @@ def ble_lines(device_name=None, duration_s=None, stall_s=None):
                 f"ble {device_name}: no data for {stall_s:.1f}s "
                 f"(connected, no notifications)")
         if item is SENTINEL:
-            return
+            break
         armed = True
         yield item
+
+    if failure:
+        # Raised only after every queued line has been yielded, so surfacing
+        # the failure never costs us the frames that did arrive before it.
+        raise failure[0]
 
 
 def make_source(source, in_path=None, duration_s=None, port=None, stall_s=None):

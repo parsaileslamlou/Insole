@@ -133,8 +133,8 @@ pip install -e ".[analysis,test,notebook]"
 5. Run the tests (step 4 first: two checks read the frame it builds):
 
    ```
-   python -m pytest -q                 # 47 passed (47 with or without step 4)
-   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (331 across the nine files once step 4 has run; 326 + 2 SKIP before it)
+   python -m pytest -q                 # 49 passed (49 with or without step 4)
+   python tests/test_stances.py        # or any one file, for its PASS/FAIL lines (333 across the ten files once step 4 has run; 328 + 2 SKIP before it)
    ```
 
 6. Or do steps 1–3 in one command, deterministic, leaving nothing behind
@@ -440,7 +440,7 @@ says so.
 ## Tests
 
 ```
-python -m pytest -q                 # everything, from the repository root (47 functions)
+python -m pytest -q                 # everything, from the repository root (49 functions)
 python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 ```
 
@@ -454,6 +454,7 @@ python tests/test_faults.py         # or any one file, for its PASS/FAIL lines
 | [tests/test_infer_live.py](tests/test_infer_live.py) | Streaming == batch features on every capture; read boundaries; malformed frames; all-zero frames; `MAX_DURATION` discards; file/serial/BLE parity; no state leaks; the stall watchdog; the model's representation drives the feature path and an unhonourable one is refused. | 81 |
 | [tests/test_faults.py](tests/test_faults.py) | The three fault modes through logger and streamer; byte identity with faults off; the accounting identity; the CLI. | 55 |
 | [tests/test_parse_frame.py](tests/test_parse_frame.py) | The frame codec's rejection paths (frame spec section 8). | 9 |
+| [tests/test_ble_transport.py](tests/test_ble_transport.py) | The BLE reader thread's failure reaches the consumer rather than being swallowed; batched notification arrival is not counted as a broken sample clock. Needs no radio and never imports `bleak`. | 2 |
 | [tests/test_train_real.py](tests/test_train_real.py) | The splits (no overlap, order, sizes, contiguous blocks); leave-one-session-out on the two sessions (two folds, every stance once, no session on both sides, the per-fold class counts); identity gains make C equal B; the shipped representation reproduces the bake-off frame and raw counts still give the pre-switch figure; `scripts/train_real.py` end to end, with the split the data on disk allows. | 37 |
 
 Every file's checks print PASS/FAIL lines and return their counts; the
@@ -467,29 +468,29 @@ fails pytest too. The PASS-line column above is the count once
 `.gitignore` excludes. Without it each file prints one `SKIP` line naming the
 command that produces it, and a skipped check counts as neither a pass nor a
 failure. The two `SKIP` lines are script-suite checks, not pytest tests:
-pytest collects 47 functions and passes 47 either way, because the wrappers
+pytest collects 49 functions and passes 49 either way, because the wrappers
 assert only that nothing *failed*.
 
 | Run directly (`python tests/test_*.py`) | Fresh clone | After `python scripts/bakeoff.py` |
 | --- | --- | --- |
 | `tests/test_infer_live.py` | 80 PASS, 1 SKIP | 81 PASS |
 | `tests/test_train_real.py` | 33 PASS, 1 SKIP | 37 PASS |
-| the other seven files | 213 PASS | 213 PASS |
-| **total** | **326 PASS, 0 FAIL, 2 SKIP** | **331 PASS, 0 FAIL, 0 SKIP** |
-| `python -m pytest -q` | 47 passed | 47 passed |
+| the other eight files | 215 PASS | 215 PASS |
+| **total** | **328 PASS, 0 FAIL, 2 SKIP** | **333 PASS, 0 FAIL, 0 SKIP** |
+| `python -m pytest -q` | 49 passed | 49 passed |
 
 The two `SKIP` lines gate five checks between them, not two: the
 `test_train_real.py` skip stands in front of four. `scripts/fit_model.py` is
 not needed for either — `models/model_lda.json` is committed — so
-`python scripts/bakeoff.py` alone takes a fresh clone from 326 to 331.
+`python scripts/bakeoff.py` alone takes a fresh clone from 328 to 333.
 **A fresh clone is green before anything is generated**, and a missing
 generated artifact and a real failure are not reported as the same thing.
 
 ## Closing state
 
-This section is final. The two lists below replace the open-items list: the
-first is what this project accepts and will not fix, the second is what is
-parked on another machine. Neither is a to-do list.
+This section is final. The three lists below replace the open-items list:
+what this project accepts and will not fix, what has since been resolved, and
+what is still parked on another machine. None of them is a to-do list.
 
 ### Accepted limitations
 
@@ -574,13 +575,33 @@ it stands. The sentence after each says why it is accepted rather than fixed.
   uncertainty understates the real one: the operator reading the scale
   dominates. *Accepted because the file is append-only by design and the raw
   counts it derives from are all still there, so a better estimator can be
-  applied downstream without rewriting history.*
+  applied downstream without rewriting the manifest.*
+
+### Resolved
+
+Both branches that were parked on the other machine have been swept. Neither
+is on this remote; both are archived in a local git bundle,
+`insole_archive_branches.bundle`, which `git bundle verify` reports as
+carrying their complete history.
+
+- **`cal-wls-local` — evaluated and rejected.** Its `1/sigma_x^2`-weighted
+  calibration fit was measured against the shipped unweighted OLS fit and not
+  adopted: it shifts the fitted slope 2.5–7.1 % on five of six channels,
+  changes no `MIN_R2` flag (every channel the shipped fit marks `poor_fit`
+  stays `poor_fit`), and the information ratio that motivates it is 1.9–2.3x
+  on the captures that exist rather than the 19.9x quoted for a hypothetical
+  load ladder. Both estimators, and the reasoning, are written up in
+  `docs/calibration_notes.md`.
+- **`wip/ble-transport` — landed.** Its BLE reader-thread failure fix is now
+  in `insole/read_serial.py`: the reader's exception is parked and re-raised in
+  the consumer once every queued line has been yielded, so a dead radio
+  produces a traceback and a nonzero exit instead of a short capture that looks
+  clean. `tests/test_ble_transport.py` came with it and covers both that path
+  and the batched-arrival timing check.
 
 ### Pending elsewhere
 
-Not open questions about this repository — work that exists on another
+Not an open question about this repository — work that exists on another
 machine and is not represented here.
 
-- **`cal-wls-local` and `wip/ble-transport` are unswept**, on the other
-  machine and not on this remote.
 - **The original finish log is unrecovered.**
