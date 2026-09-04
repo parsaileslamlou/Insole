@@ -94,6 +94,19 @@ switches from its time-blocked within-session split to **leave-one-session-out**
 on its own once each class has two or more sessions. It was **not** run as part
 of this collection.
 
+> **Known breakage — read before running the analysis.** Adding this set makes
+> `scripts/train_real.py` abort *before* it reaches that multi-session path. The
+> guard at lines 440-442 sums stances per **label** and asserts against
+> `EXPECTED_STANCES`, which pins the `_02` counts alone, so `walk` now reports
+> **67 against an expected 35**. The minimal fix is to apply the pin to the `_02`
+> files only rather than to per-label totals; the multi-session branch four lines
+> below it (`multi_session`, `leave_one_session_out`) already exists and is what
+> the guard is blocking. `tests/test_train_real.py` fails five checks until then
+> — it also pins `meta["sessions"]` to the three `_02` names and asserts the
+> generated document still says "no per-session split exists", both of which stop
+> being true once the split flips. Deliberately left to whoever owns the
+> analysis.
+
 | file | date | activity | path shape | duration | valid | stances | notes |
 |---|---|---|---|---|---|---|---|
 | `stand_03.csv` | 2026-09-03 | stand | stationary, quiet standing | 60 s | 6001 | 0 | s2 nonzero on 0.4 % of frames; s4 nonzero on 98.8 % — the reverse of `stand_02.csv` |
