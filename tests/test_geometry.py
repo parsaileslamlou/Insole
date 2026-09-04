@@ -9,7 +9,7 @@ detector.INSOLE_LEN_MM rather than typed as a decimal, so a re-measurement
 moves the geometry and the expectations together instead of turning this file
 into a set of assertions about coordinates nobody uses any more.
 
-The one exception is test_documented_values, which deliberately pins the
+The one exception is check_documented_values, which deliberately pins the
 CURRENT numbers as literals. It is a canary: if a re-measurement lands, that
 suite is SUPPOSED to fail, and its failure means the figures quoted in
 README.md and docs/ have gone stale and need rewriting. It is not a bug.
@@ -17,6 +17,10 @@ README.md and docs/ have gone stale and need rewriting. It is not a bug.
 Orientation the tests enforce, from data/real/README.md:
     x = distance from the MEDIAL edge, so x = 0 is medial, larger x is lateral
     y = distance from the HEEL end,    so y = 0 is heel,   larger y is toe
+
+Each check_* function prints PASS/FAIL lines and returns (passed, failed);
+the test_* wrapper of the same name asserts nothing failed, so pytest sees a
+failure and the direct run keeps its counts.
 """
 
 import sys
@@ -69,7 +73,7 @@ def close(got, want, tol=TOL):
             and abs(got[1] - want[1]) <= tol)
 
 
-def test_coords_derived():
+def check_coords_derived():
     """SENSOR_COORDS must be SENSOR_MM / INSOLE_LEN_MM on BOTH axes.
 
     Guards the normalisation choice itself. Dividing x by the width instead
@@ -119,7 +123,7 @@ def test_coords_derived():
     return passed, failed
 
 
-def test_single_sensor():
+def check_single_sensor():
     """One sensor loaded, the other five at zero -> CoP is exactly that sensor.
 
     A weighted mean over a single non-zero weight has to return that point
@@ -138,7 +142,7 @@ def test_single_sensor():
     return passed, failed
 
 
-def test_equal_loading():
+def check_equal_loading():
     """Equal counts -> the unweighted mean of the loaded sensors' coordinates."""
     passed = failed = 0
 
@@ -168,7 +172,7 @@ def test_equal_loading():
     return passed, failed
 
 
-def test_orientation():
+def check_orientation():
     """Medial/lateral and heel/toe must not be silently transposed.
 
     The value tests above would all still pass if x and y were swapped
@@ -208,7 +212,7 @@ def test_orientation():
     return passed, failed
 
 
-def test_all_zero_is_documented():
+def check_all_zero_is_documented():
     """All six at zero. Records CURRENT behaviour; adds no handling.
 
     cop_frame short-circuits on total_weight == 0 and returns (nan, nan)
@@ -254,12 +258,12 @@ def test_all_zero_is_documented():
     return passed, failed
 
 
-def test_documented_values():
+def check_documented_values():
     """CANARY. Pins today's numbers as literals so a re-measurement is loud.
 
     Everything else in this file is derived and survives a re-measurement.
     These do not, on purpose: they are the exact figures quoted in README.md,
-    docs/sim_vs_real.md and the Prompt 13 writeup. If this suite fails, the
+    docs/sim_vs_real.md and the stage 13 writeup. If this suite fails, the
     geometry moved and those documents are stale -- rewrite them, then update
     the literals here. Do NOT relax these to match new output while leaving
     the prose alone.
@@ -286,12 +290,42 @@ def test_documented_values():
     return passed, failed
 
 
+
+def test_coords_derived():
+    p, f = check_coords_derived()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_single_sensor():
+    p, f = check_single_sensor()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_equal_loading():
+    p, f = check_equal_loading()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_orientation():
+    p, f = check_orientation()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_all_zero_is_documented():
+    p, f = check_all_zero_is_documented()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_documented_values():
+    p, f = check_documented_values()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
 if __name__ == "__main__":
     total_pass = total_fail = 0
-    for suite in (test_coords_derived, test_single_sensor, test_equal_loading,
-                  test_orientation, test_all_zero_is_documented,
-                  test_documented_values):
-        print(f"--- {suite.__name__} ---")
+    for suite in (check_coords_derived, check_single_sensor, check_equal_loading,
+                  check_orientation, check_all_zero_is_documented,
+                  check_documented_values):
+        print(f"--- {suite.__name__.replace('check_', 'test_', 1)} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f
         print()

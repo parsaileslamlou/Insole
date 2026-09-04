@@ -29,6 +29,10 @@ the defects worth catching here -- a sign error, the conductance transform
 inverted, grams treated as kilograms -- miss by orders of magnitude, not by
 percent. A tolerance tight enough to catch a 0.5% bias would only be measuring
 the RNG.
+
+Each check_* function prints PASS/FAIL lines and returns (passed, failed);
+the test_* wrapper of the same name asserts nothing failed, so pytest sees a
+failure and the direct run keeps its counts.
 """
 
 import csv
@@ -103,7 +107,7 @@ def noisy_sweep(seed, loads=LOADS_G, a=A_TRUE, b=B_TRUE):
 # ---------------------------------------------------------------------------
 # 1. Recovery of a known line
 # ---------------------------------------------------------------------------
-def test_recovery():
+def check_recovery():
     passed = failed = 0
 
     worst_a = worst_b = 0.0
@@ -154,7 +158,7 @@ def test_recovery():
 # ---------------------------------------------------------------------------
 # 2. Flat / dead sensors are flagged, not fit
 # ---------------------------------------------------------------------------
-def test_flat_flagged():
+def check_flat_flagged():
     passed = failed = 0
     rng = random.Random(7)
 
@@ -209,7 +213,7 @@ def test_flat_flagged():
 # ---------------------------------------------------------------------------
 # 3. Saturation returns None, is counted, and is never clamped
 # ---------------------------------------------------------------------------
-def test_saturation():
+def check_saturation():
     passed = failed = 0
 
     for label, c in [("at full scale", FS_COUNTS),
@@ -306,7 +310,7 @@ def test_saturation():
 # ---------------------------------------------------------------------------
 # 4. apply_calibration round-trip
 # ---------------------------------------------------------------------------
-def test_apply_round_trip():
+def check_apply_round_trip():
     passed = failed = 0
 
     # Six sensors with distinct slopes, so a channel-ordering bug shows up.
@@ -411,7 +415,7 @@ def _write_manifest(path, rows):
         csv.writer(f).writerows(rows)
 
 
-def test_gain_match():
+def check_gain_match():
     passed = failed = 0
 
     doc = derive_gain_match(GAIN_MANIFEST)
@@ -574,11 +578,36 @@ def _raises(fn):
     return False
 
 
+
+def test_recovery():
+    p, f = check_recovery()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_flat_flagged():
+    p, f = check_flat_flagged()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_saturation():
+    p, f = check_saturation()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_apply_round_trip():
+    p, f = check_apply_round_trip()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_gain_match():
+    p, f = check_gain_match()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
 if __name__ == "__main__":
     total_pass = total_fail = 0
-    for suite in (test_recovery, test_flat_flagged, test_saturation,
-                  test_apply_round_trip, test_gain_match):
-        print(f"--- {suite.__name__} ---")
+    for suite in (check_recovery, check_flat_flagged, check_saturation,
+                  check_apply_round_trip, check_gain_match):
+        print(f"--- {suite.__name__.replace('check_', 'test_', 1)} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f
         print()

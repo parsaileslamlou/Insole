@@ -6,11 +6,15 @@ read_serial's seam changes). Run from the repo root:
 Also collected by pytest. No hardware: the serial and BLE sources are
 replaced by fakes that yield the same bytes a file would.
 
-The one that matters is test_equivalence: on every capture in the repo, the
+The one that matters is check_equivalence: on every capture in the repo, the
 per-stance features infer_live.py prints must be IDENTICAL to what
 features.extract_features computes on the CSV read_serial.py writes from the
 same file. If they ever differ, the model is being fed a distribution it was
 not trained on, and every other test here is decoration.
+
+Each check_* function prints PASS/FAIL lines and returns (passed, failed);
+the test_* wrapper of the same name asserts nothing failed, so pytest sees a
+failure and the direct run keeps its counts.
 """
 
 import contextlib
@@ -179,7 +183,7 @@ def write_lines(path, lines):
 # ---------------------------------------------------------------------------
 # 1. Equivalence: streaming features == batch features, every file
 # ---------------------------------------------------------------------------
-def test_equivalence():
+def check_equivalence():
     t = Tally()
 
     for stem in SIM_FIXTURES:
@@ -235,7 +239,7 @@ def test_equivalence():
 # ---------------------------------------------------------------------------
 # 2. A stance spanning a read boundary
 # ---------------------------------------------------------------------------
-def test_read_boundary():
+def check_read_boundary():
     t = Tally()
     txt = os.path.join(DATA_SIM, "sim_walk.txt")
     lines = [ln for ln in RS.file_lines(txt)]
@@ -276,7 +280,7 @@ def test_read_boundary():
 # ---------------------------------------------------------------------------
 # 3. Malformed frames arriving mid-stance
 # ---------------------------------------------------------------------------
-def test_malformed_mid_stance():
+def check_malformed_mid_stance():
     t = Tally()
     lines = [ln for ln in RS.file_lines(os.path.join(DATA_SIM, "sim_walk.txt"))]
     feats0 = batch_features(ensure_csv("sim_walk"))
@@ -318,7 +322,7 @@ def test_malformed_mid_stance():
 # ---------------------------------------------------------------------------
 # 4. All-zero frames: the (nan, nan) CoP path
 # ---------------------------------------------------------------------------
-def test_all_zero_frames():
+def check_all_zero_frames():
     t = Tally()
 
     # Two runs close enough to merge, with all-zero frames in the gap. The
@@ -358,7 +362,7 @@ def test_all_zero_frames():
 # ---------------------------------------------------------------------------
 # 5. A stance exceeding MAX_DURATION
 # ---------------------------------------------------------------------------
-def test_max_duration():
+def check_max_duration():
     t = Tally()
     long_run = D.MAX_DURATION + 50
 
@@ -406,7 +410,7 @@ def test_max_duration():
 # ---------------------------------------------------------------------------
 # 6. Source swap: file vs serial vs ble on identical bytes
 # ---------------------------------------------------------------------------
-def test_source_swap():
+def check_source_swap():
     t = Tally()
     txt = os.path.join(DATA_SIM, "sim_fast.txt")
     lines = [ln for ln in RS.file_lines(txt)]
@@ -439,7 +443,7 @@ def test_source_swap():
 # ---------------------------------------------------------------------------
 # 7. No state leaks between consecutive stances
 # ---------------------------------------------------------------------------
-def test_no_state_leak():
+def check_no_state_leak():
     t = Tally()
 
     # (a) K identical pulses -> K identical stances at the expected offsets.
@@ -494,7 +498,7 @@ def test_no_state_leak():
 # ---------------------------------------------------------------------------
 # 8. The seam: call-time defaults, --port/--duration, the stall watchdog
 # ---------------------------------------------------------------------------
-def test_seam_and_watchdog():
+def check_seam_and_watchdog():
     t = Tally()
 
     for fn in (RS.serial_lines, RS.ble_lines, RS.make_source):
@@ -592,7 +596,7 @@ def test_seam_and_watchdog():
 # ---------------------------------------------------------------------------
 # 9. Calibration anchor and the persisted model
 # ---------------------------------------------------------------------------
-def test_anchor_and_model():
+def check_anchor_and_model():
     t = Tally()
 
     # CAL_MAX_COUNTS is a number about cal_data/, so recompute it from there.
@@ -639,14 +643,59 @@ def test_anchor_and_model():
     return t.result()
 
 
-SUITES = [test_equivalence, test_read_boundary, test_malformed_mid_stance,
-          test_all_zero_frames, test_max_duration, test_source_swap,
-          test_no_state_leak, test_seam_and_watchdog, test_anchor_and_model]
+
+def test_equivalence():
+    p, f = check_equivalence()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_read_boundary():
+    p, f = check_read_boundary()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_malformed_mid_stance():
+    p, f = check_malformed_mid_stance()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_all_zero_frames():
+    p, f = check_all_zero_frames()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_max_duration():
+    p, f = check_max_duration()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_source_swap():
+    p, f = check_source_swap()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_no_state_leak():
+    p, f = check_no_state_leak()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_seam_and_watchdog():
+    p, f = check_seam_and_watchdog()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_anchor_and_model():
+    p, f = check_anchor_and_model()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+SUITES = [check_equivalence, check_read_boundary, check_malformed_mid_stance,
+          check_all_zero_frames, check_max_duration, check_source_swap,
+          check_no_state_leak, check_seam_and_watchdog, check_anchor_and_model]
 
 if __name__ == "__main__":
     total_pass = total_fail = 0
     for suite in SUITES:
-        print(f"--- {suite.__name__} ---")
+        print(f"--- {suite.__name__.replace('check_', 'test_', 1)} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f
         print()

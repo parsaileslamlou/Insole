@@ -42,6 +42,10 @@ To confirm this test really does fail against the old logic, revert just the
 anchor hunk in main() -- restore `t0 = time.time()` above the loop and put back
 `if time.time() - t0 > DURATION_S + 5: break` -- and re-run. It reports 301
 where it wants 600.
+
+Each check_* function prints PASS/FAIL lines and returns (passed, failed);
+the test_* wrapper of the same name asserts nothing failed, so pytest sees a
+failure and the direct run keeps its counts.
 """
 
 import contextlib
@@ -172,7 +176,7 @@ def _note(out):
 # ---------------------------------------------------------------------------
 # Suites
 # ---------------------------------------------------------------------------
-def test_slow_discovery_does_not_shorten_the_capture():
+def check_slow_discovery_does_not_shorten_the_capture():
     """The regression proper. 8 s of discovery, then a full 6 s of frames."""
     passed = failed = 0
 
@@ -208,7 +212,7 @@ def test_slow_discovery_does_not_shorten_the_capture():
     return passed, failed
 
 
-def test_short_capture_is_still_reported():
+def check_short_capture_is_still_reported():
     """The other half: the NOTE must fire on a real truncation, and only then.
 
     Committed alongside the anchor test because the two only mean something
@@ -246,7 +250,7 @@ def test_short_capture_is_still_reported():
     return passed, failed
 
 
-def test_file_replay_is_unaffected():
+def check_file_replay_is_unaffected():
     """--source file must not pick up a live-source behaviour. See V5."""
     passed = failed = 0
 
@@ -267,12 +271,27 @@ def test_file_replay_is_unaffected():
     return passed, failed
 
 
+
+def test_slow_discovery_does_not_shorten_the_capture():
+    p, f = check_slow_discovery_does_not_shorten_the_capture()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_short_capture_is_still_reported():
+    p, f = check_short_capture_is_still_reported()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_file_replay_is_unaffected():
+    p, f = check_file_replay_is_unaffected()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
 if __name__ == "__main__":
     total_pass = total_fail = 0
-    for suite in (test_slow_discovery_does_not_shorten_the_capture,
-                  test_short_capture_is_still_reported,
-                  test_file_replay_is_unaffected):
-        print(f"--- {suite.__name__} ---")
+    for suite in (check_slow_discovery_does_not_shorten_the_capture,
+                  check_short_capture_is_still_reported,
+                  check_file_replay_is_unaffected):
+        print(f"--- {suite.__name__.replace('check_', 'test_', 1)} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f
         print()

@@ -1,6 +1,10 @@
 """The frame codec's rejection paths (docs/frame_spec.md section 8). Run:
 
     python tests/test_parse_frame.py
+
+check_parse_frame prints PASS/FAIL lines and returns (passed, failed); the
+test_parse_frame wrapper asserts nothing failed, so pytest sees a failure and
+the direct run keeps its counts.
 """
 
 import sys
@@ -21,17 +25,27 @@ CASES = [
     ("INS,41,152300,2048,1900,300,150,2200,3000,14",        ("bad_checksum", None)),
 ]
 
-passed = failed = 0
 
-for line, expected in CASES:
-    result = parse_frame(line)
-    if result == expected:
-        passed += 1
-        print(f"PASS  {line}")
-    else:
-        failed += 1
-        print(f"FAIL  got={result}  want={expected}  line={line}")
+def check_parse_frame():
+    passed = failed = 0
+    for line, expected in CASES:
+        result = parse_frame(line)
+        if result == expected:
+            passed += 1
+            print(f"PASS  {line}")
+        else:
+            failed += 1
+            print(f"FAIL  got={result}  want={expected}  line={line}")
+    return passed, failed
 
-print(f"{passed} passed, {failed} failed")
-if failed:
-    sys.exit(1)
+
+def test_parse_frame():
+    p, f = check_parse_frame()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+if __name__ == "__main__":
+    passed, failed = check_parse_frame()
+    print(f"{passed} passed, {failed} failed")
+    if failed:
+        sys.exit(1)

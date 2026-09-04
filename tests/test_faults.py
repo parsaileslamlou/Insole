@@ -34,6 +34,10 @@ all three    the logger and the streamer report identical counters on the
              same stream, over a file and over the fake serial source, and
              valid + lost + bad_checksum == 6000 minus the frames lost at the
              reset boundary, which no host can see.
+
+Each check_* function prints PASS/FAIL lines and returns (passed, failed);
+the test_* wrapper of the same name asserts nothing failed, so pytest sees a
+failure and the direct run keeps its counts.
 """
 
 import contextlib
@@ -176,7 +180,7 @@ def n_stances_fault_free(noise_seed):
 # ---------------------------------------------------------------------------
 # 1. Faults off: byte identity with the pre-fault generator
 # ---------------------------------------------------------------------------
-def test_faults_off_identity():
+def check_faults_off_identity():
     t = Tally()
 
     for name, kwargs in G.STREAMS:
@@ -218,7 +222,7 @@ def test_faults_off_identity():
 # ---------------------------------------------------------------------------
 # 2. drop_rate: frames omitted -> sequence gaps
 # ---------------------------------------------------------------------------
-def test_drop_mode():
+def check_drop_mode():
     t = Tally()
     lines = gen(1, drop_rate=0.01, fault_seed=1)
     n_dropped = N_FRAMES - sum(1 for ln in lines if ln.startswith("INS"))
@@ -265,7 +269,7 @@ def test_drop_mode():
 # ---------------------------------------------------------------------------
 # 3. corrupt_rate: wrong checksums
 # ---------------------------------------------------------------------------
-def test_corrupt_mode():
+def check_corrupt_mode():
     t = Tally()
     lines = gen(2, corrupt_rate=0.01, fault_seed=2)
     n_corrupt = sum(1 for ln in lines if G.parse_frame(ln)[0] == "bad_checksum")
@@ -302,7 +306,7 @@ def test_corrupt_mode():
 # ---------------------------------------------------------------------------
 # 4. reset_at_s: the board reboots mid-capture
 # ---------------------------------------------------------------------------
-def test_reset_mode():
+def check_reset_mode():
     t = Tally()
     reset_s = 20.3                                  # inside walk stance 20 (20.0-20.62 s)
     k_reset = int(reset_s * G.SAMPLE_HZ)
@@ -373,7 +377,7 @@ def test_reset_mode():
 # ---------------------------------------------------------------------------
 # 5. All three at once: logger == streamer, file == live source
 # ---------------------------------------------------------------------------
-def test_logger_streamer_consistency():
+def check_logger_streamer_consistency():
     t = Tally()
     reset_s = 30.5
     k_reset = int(reset_s * G.SAMPLE_HZ)
@@ -423,7 +427,7 @@ def test_logger_streamer_consistency():
 # ---------------------------------------------------------------------------
 # 6. The CLI: python -m insole.gait_gen --out ... with the fault flags
 # ---------------------------------------------------------------------------
-def test_cli():
+def check_cli():
     t = Tally()
     py = sys.executable
     with tempfile.TemporaryDirectory() as tmp:
@@ -458,13 +462,43 @@ def test_cli():
     return t.result()
 
 
-SUITES = [test_faults_off_identity, test_drop_mode, test_corrupt_mode,
-          test_reset_mode, test_logger_streamer_consistency, test_cli]
+
+def test_faults_off_identity():
+    p, f = check_faults_off_identity()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_drop_mode():
+    p, f = check_drop_mode()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_corrupt_mode():
+    p, f = check_corrupt_mode()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_reset_mode():
+    p, f = check_reset_mode()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_logger_streamer_consistency():
+    p, f = check_logger_streamer_consistency()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+
+def test_cli():
+    p, f = check_cli()
+    assert f == 0, f"{f} check(s) failed; see the FAIL lines above"
+
+SUITES = [check_faults_off_identity, check_drop_mode, check_corrupt_mode,
+          check_reset_mode, check_logger_streamer_consistency, check_cli]
 
 if __name__ == "__main__":
     total_pass = total_fail = 0
     for suite in SUITES:
-        print(f"--- {suite.__name__} ---")
+        print(f"--- {suite.__name__.replace('check_', 'test_', 1)} ---")
         p, f = suite()
         total_pass, total_fail = total_pass + p, total_fail + f
         print()
