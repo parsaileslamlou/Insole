@@ -15,7 +15,9 @@ pipeline without hardware, spec to heatmap, in a few seconds, with the real
 captures beside the simulated ones; its outputs are committed so it reads on
 GitHub. [docs/writeup.md](docs/writeup.md) is the project in about 700
 words, and `./run_demo.sh` runs generate → log → predict on the simulator in
-one command.
+one command. For the hardware rather than the code, the
+[demo-v1 release](https://github.com/parsaileslamlou/Insole/releases/tag/demo-v1)
+carries a recorded walkthrough video and the full-resolution build photos.
 
 ## Data path
 
@@ -68,7 +70,7 @@ one command.
 | [data/sim/](data/sim/) | The five committed simulator fixtures `sim_*.txt`; generated CSVs and sessions land here too and are ignored. |
 | [data/bench/](data/bench/) | The stage-14 live bench: the 60 s logger and streamer captures over serial and BLE with their logs, the two stalled BLE attempts, and the press captures that show all six channels live. |
 | [cal_data/](cal_data/) | 42 bench calibration captures and their manifest. |
-| [figures/](figures/) | Rendered comparison figures. |
+| [figures/](figures/) | Rendered comparison figures, and `hardware/`: photographs of the build. |
 | [firmware/insole/](firmware/insole/) | The Arduino sketch and its header. |
 | [run_demo.sh](run_demo.sh) | The simulator demo in one command; prints `DEMO OK` or exits nonzero. |
 
@@ -183,6 +185,28 @@ Always start from a fresh session.
 
 Bench detail, failure modes and every measurement that is not in a script
 are in [docs/hardware_notes.md](docs/hardware_notes.md).
+
+**The build.** Six FSRs taped to a right insole, wired back to an ESP32-S3 on
+a perfboard carrier and run off a USB power bank, so the rig is untethered
+while walking.
+
+![The assembled rig: instrumented insole, ESP32-S3 carrier and USB power bank](figures/hardware/assembled_rig.jpg)
+
+*The assembled rig, powered and ready to walk.*
+
+![The right insole with its six FSRs taped in place, carrier board beside it](figures/hardware/insole_sensors.jpg)
+
+*The six FSRs in place on the right insole; their measured coordinates are
+tabulated under **Sensor placement** below.*
+
+![Close-up of the ESP32-S3-DevKitC-1 on its perfboard carrier, showing the divider resistors and the six sensor leads](figures/hardware/board_carrier.jpg)
+
+*The ESP32-S3-DevKitC-1 on its carrier, with the divider resistors and the six
+sensor leads landing on ADC1.*
+
+Downscaled to 1600 px for this page. The originals, and a recorded walkthrough
+video, are attached to the
+[demo-v1 release](https://github.com/parsaileslamlou/Insole/releases/tag/demo-v1).
 
 **Board.** ESP32-S3-DevKitC-1 (WROOM-1), Arduino-ESP32 core. The sketch folder
 name equals the sketch name (`firmware/insole/insole.ino`). In the Arduino IDE
